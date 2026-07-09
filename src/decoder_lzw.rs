@@ -227,9 +227,7 @@ pub(crate) fn dgif_decompress_input(
     // Exact match of the C pre-increment-then-compare pattern.
     if gif.Private.lzw.running_code < LZ_MAX_CODE as c_int + 2 {
         gif.Private.lzw.running_code += 1;
-        if gif.Private.lzw.running_code > gif.Private.lzw.max_code1
-            && running_bits < LZ_BITS
-        {
+        if gif.Private.lzw.running_code > gif.Private.lzw.max_code1 && running_bits < LZ_BITS {
             gif.Private.lzw.max_code1 <<= 1;
             gif.Private.lzw.running_bits += 1;
         }

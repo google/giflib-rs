@@ -19,7 +19,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-
 pub use crate::c_types_gen::{
     GifByteType, GifColorType, GifPixelType, GifPrefixType, GifRecordType, GifWord,
     GraphicsControlBlock, InputFunc, OutputFunc, APPLICATION_EXT_FUNC_CODE, COMMENT_EXT_FUNC_CODE,

@@ -190,7 +190,10 @@ pub unsafe extern "C" fn DGifOpen(
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn DGifCloseFile(gif_file: Option<Box<GifFileType>>, error: Option<&mut c_int>) -> c_int {
+pub extern "C" fn DGifCloseFile(
+    gif_file: Option<Box<GifFileType>>,
+    error: Option<&mut c_int>,
+) -> c_int {
     match gif_file {
         Some(_) => GIF_OK, // Box<GifFileType> drops here, triggering Drop impl.
         None => {
@@ -411,7 +414,10 @@ pub extern "C" fn DGifGetCodeNext(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn DGifGetLZCodes(gif_file: Option<&mut GifFileType>, code: Option<&mut c_int>) -> c_int {
+pub extern "C" fn DGifGetLZCodes(
+    gif_file: Option<&mut GifFileType>,
+    code: Option<&mut c_int>,
+) -> c_int {
     let Some(code) = code else {
         return GIF_ERROR;
     };
@@ -793,7 +799,10 @@ pub unsafe extern "C" fn EGifOpen(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn EGifCloseFile(gif_file: Option<Box<GifFileType>>, error: Option<&mut c_int>) -> c_int {
+pub extern "C" fn EGifCloseFile(
+    gif_file: Option<Box<GifFileType>>,
+    error: Option<&mut c_int>,
+) -> c_int {
     let Some(mut gif) = gif_file else {
         if let Some(error) = error {
             *error = E_GIF_ERR_CLOSE_FAILED;
@@ -840,14 +849,8 @@ pub extern "C" fn EGifPutScreenDesc(
     let Some(gif) = gif_file else {
         return GIF_ERROR;
     };
-    let r = encoder::egif_put_screen_desc(
-        gif,
-        width,
-        height,
-        color_resolution,
-        background,
-        color_map,
-    );
+    let r =
+        encoder::egif_put_screen_desc(gif, width, height, color_resolution, background, color_map);
     gif.result_to_status(r)
 }
 
@@ -920,7 +923,10 @@ pub extern "C" fn EGifPutComment(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn EGifPutExtensionLeader(gif_file: Option<&mut GifFileType>, ext_code: c_int) -> c_int {
+pub extern "C" fn EGifPutExtensionLeader(
+    gif_file: Option<&mut GifFileType>,
+    ext_code: c_int,
+) -> c_int {
     let Some(gif) = gif_file else {
         return GIF_ERROR;
     };
@@ -1048,7 +1054,10 @@ pub unsafe extern "C" fn EGifPutCodeNext(
 ///
 /// This is a consume-and-close operation.
 #[unsafe(no_mangle)]
-pub extern "C" fn EGifSpew(gif_file: Option<Box<GifFileType>>, error_code: Option<&mut c_int>) -> c_int {
+pub extern "C" fn EGifSpew(
+    gif_file: Option<Box<GifFileType>>,
+    error_code: Option<&mut c_int>,
+) -> c_int {
     let Some(mut gif) = gif_file else {
         if let Some(error_code) = error_code {
             *error_code = E_GIF_ERR_NOT_WRITEABLE;

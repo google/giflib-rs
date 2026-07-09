@@ -33,3 +33,9 @@ to put up guardrails where possible.
    version returns an error code. This typically does not affect Linux-based
    systems, which overcommit memory and then use the OOM Killer instead of
    failing allocations.
+
+-----------------
+
+This is not an officially supported Google product.
+This project is not eligible for the
+[Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
