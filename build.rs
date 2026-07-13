@@ -1,3 +1,4 @@
+// Copyright (c) 1997-2025 Eric S. Raymond
 // Copyright (c) 2026 Google LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
