@@ -68,7 +68,7 @@ impl ColorMapObject {
         unsafe { self.Colors.with_len(self.ColorCount) }
     }
 
-    pub fn colors_mut(&mut self) -> CSliceRefMut<'_, GifColorType> {
+    pub fn colors_mut(&mut self) -> CSliceRefMut<'_, GifColorType, c_int> {
         // SAFETY: the length of `Colors` is `ColorCount`.
         unsafe { self.Colors.with_len_mut(&mut self.ColorCount) }
     }
@@ -161,7 +161,7 @@ impl ExtensionBlock {
         unsafe { self.Bytes.with_len(self.ByteCount) }
     }
 
-    pub fn bytes_mut(&mut self) -> CSliceRefMut<'_, u8> {
+    pub fn bytes_mut(&mut self) -> CSliceRefMut<'_, u8, c_int> {
         // SAFETY: the length of `Bytes` is `ByteCount`.
         unsafe { self.Bytes.with_len_mut(&mut self.ByteCount) }
     }
@@ -250,7 +250,7 @@ impl SavedImage {
         unsafe { self.ExtensionBlocks.with_len(self.ExtensionBlockCount) }
     }
 
-    pub fn extension_blocks_mut(&mut self) -> CSliceRefMut<'_, ExtensionBlock> {
+    pub fn extension_blocks_mut(&mut self) -> CSliceRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
         unsafe { self.ExtensionBlocks.with_len_mut(&mut self.ExtensionBlockCount) }
     }
@@ -319,7 +319,7 @@ impl GifFileType {
         unsafe { self.SavedImages.with_len(self.ImageCount) }
     }
 
-    pub fn saved_images_mut(&mut self) -> CSliceRefMut<'_, SavedImage> {
+    pub fn saved_images_mut(&mut self) -> CSliceRefMut<'_, SavedImage, c_int> {
         // SAFETY: the length of `SavedImages` is `ImageCount`.
         unsafe { self.SavedImages.with_len_mut(&mut self.ImageCount) }
     }
@@ -329,7 +329,7 @@ impl GifFileType {
         unsafe { self.ExtensionBlocks.with_len(self.ExtensionBlockCount) }
     }
 
-    pub fn extension_blocks_mut(&mut self) -> CSliceRefMut<'_, ExtensionBlock> {
+    pub fn extension_blocks_mut(&mut self) -> CSliceRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
         unsafe { self.ExtensionBlocks.with_len_mut(&mut self.ExtensionBlockCount) }
     }
