@@ -570,7 +570,7 @@ pub fn egif_gcb_to_saved_extension(
     // No existing GCB block found — add a new one.
     let mut ext = [0u8; 4];
     egif_gcb_to_extension(gcb, &mut ext);
-    saved.extension_blocks_mut().add(ExtensionBlock::new(GRAPHICS_EXT_FUNC_CODE, &ext));
+    saved.extension_blocks_mut().push_back(ExtensionBlock::new(GRAPHICS_EXT_FUNC_CODE, &ext));
 
     Ok(())
 }

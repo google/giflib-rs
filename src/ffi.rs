@@ -606,10 +606,12 @@ pub unsafe extern "C" fn GifAddExtensionBlock(
     let Some(extension_blocks) = extension_blocks else {
         return GIF_ERROR;
     };
+    let zero_buf;
     let data: &[u8] = if ext_data.is_null() || len == 0 {
         if len > 0 {
             // null ext_data but len > 0: create zeroed buffer to match C behavior.
-            &vec![0u8; len as usize]
+            zero_buf = vec![0u8; len as usize];
+            &zero_buf
         } else {
             &[]
         }
@@ -623,7 +625,7 @@ pub unsafe extern "C" fn GifAddExtensionBlock(
         // Cast through CSlicePtr to get the right &mut type.
         let blocks =
             &mut *(extension_blocks as *mut _ as *mut safer_cffi::CSlicePtr<ExtensionBlock>);
-        blocks.with_len_mut(extension_block_count).add(block)
+        blocks.with_len_vec_mut(extension_block_count).push_back(block)
     };
     GIF_OK
 }
@@ -650,7 +652,7 @@ pub unsafe extern "C" fn GifFreeExtensions(
     unsafe {
         let blocks =
             &mut *(extension_blocks as *mut _ as *mut safer_cffi::CSlicePtr<ExtensionBlock>);
-        blocks.with_len_mut(extension_block_count).clear()
+        blocks.with_len_vec_mut(extension_block_count).clear()
     };
 }
 
@@ -676,7 +678,7 @@ pub extern "C" fn GifMakeSavedImage(
         })
     };
 
-    gif.saved_images_mut().add(sp);
+    gif.saved_images_mut().push_back(sp);
 
     // Return pointer to the newly added last element.
     gif.saved_images_mut().last_mut().expect("saved_images should have at least one element")

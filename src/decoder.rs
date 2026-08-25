@@ -272,7 +272,7 @@ pub fn dgif_get_image_desc(gif: &mut GifFileType) -> Result<(), GifError> {
     // Create new SavedImage locally and initialize.
     let image = SavedImage::new(gif.Image.clone());
 
-    gif.saved_images_mut().add(image);
+    gif.saved_images_mut().push_back(image);
 
     Ok(())
 }
@@ -558,7 +558,7 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                 gif.extension_blocks_mut().swap(&mut sp.extension_blocks_mut());
 
                 // Commit the fully-built image.
-                gif.saved_images_mut().add(sp);
+                gif.saved_images_mut().push_back(sp);
             }
             GifRecordType::EXTENSION_RECORD_TYPE => {
                 let mut ext_function: c_int = 0;
@@ -568,7 +568,7 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
 
                 if let Some(data) = buf_payload(&gif.Private.lzw.buf) {
                     let block = ExtensionBlock::new(ext_function, data);
-                    gif.extension_blocks_mut().add(block);
+                    gif.extension_blocks_mut().push_back(block);
                 }
 
                 loop {
@@ -580,7 +580,7 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                         break;
                     };
                     let block = ExtensionBlock::new(CONTINUE_EXT_FUNC_CODE, data);
-                    gif.extension_blocks_mut().add(block);
+                    gif.extension_blocks_mut().push_back(block);
                 }
             }
             GifRecordType::TERMINATE_RECORD_TYPE => break,

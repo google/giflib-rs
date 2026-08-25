@@ -101,7 +101,7 @@ impl ColorMapObject {
             return Some(result);
         }
 
-        // Drop the CSliceRefMut before accessing color_union fields directly.
+        // Drop the CVecRefMut before accessing color_union fields directly.
         drop(cu_colors);
         color_union.ColorCount = round_up_to as c_int;
         color_union.BitsPerPixel = new_bit_size;
