@@ -33,7 +33,7 @@ pub use crate::c_types_gen::{
     E_GIF_SUCCEEDED, GIF87_STAMP, GIF89_STAMP, GIF_ERROR, GIF_OK, GIF_STAMP, GIF_VERSION_POS,
     GRAPHICS_EXT_FUNC_CODE, NO_TRANSPARENT_COLOR, PLAINTEXT_EXT_FUNC_CODE,
 };
-use safer_cffi::{CSlicePtr, CSliceRefMut};
+use safer_cffi::{CSlicePtr, CVecRefMut};
 use std::os::raw::c_int;
 use std::os::raw::c_uchar;
 use std::os::raw::c_uint;
@@ -68,9 +68,9 @@ impl ColorMapObject {
         unsafe { self.Colors.with_len(self.ColorCount) }
     }
 
-    pub fn colors_mut(&mut self) -> CSliceRefMut<'_, GifColorType, c_int> {
+    pub fn colors_mut(&mut self) -> CVecRefMut<'_, GifColorType, c_int> {
         // SAFETY: the length of `Colors` is `ColorCount`.
-        unsafe { self.Colors.with_len_mut(&mut self.ColorCount) }
+        unsafe { self.Colors.with_len_vec_mut(&mut self.ColorCount) }
     }
 }
 
@@ -161,9 +161,9 @@ impl ExtensionBlock {
         unsafe { self.Bytes.with_len(self.ByteCount) }
     }
 
-    pub fn bytes_mut(&mut self) -> CSliceRefMut<'_, u8, c_int> {
+    pub fn bytes_mut(&mut self) -> CVecRefMut<'_, u8, c_int> {
         // SAFETY: the length of `Bytes` is `ByteCount`.
-        unsafe { self.Bytes.with_len_mut(&mut self.ByteCount) }
+        unsafe { self.Bytes.with_len_vec_mut(&mut self.ByteCount) }
     }
 }
 
@@ -250,9 +250,9 @@ impl SavedImage {
         unsafe { self.ExtensionBlocks.with_len(self.ExtensionBlockCount) }
     }
 
-    pub fn extension_blocks_mut(&mut self) -> CSliceRefMut<'_, ExtensionBlock, c_int> {
+    pub fn extension_blocks_mut(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
-        unsafe { self.ExtensionBlocks.with_len_mut(&mut self.ExtensionBlockCount) }
+        unsafe { self.ExtensionBlocks.with_len_vec_mut(&mut self.ExtensionBlockCount) }
     }
 }
 
@@ -260,7 +260,7 @@ impl Drop for SavedImage {
     fn drop(&mut self) {
         let mut count = self.raster_bits().len() as c_int;
         // SAFETY: By implementation of `.raster_bits()`, `count` is a safe length for `RasterBits`.
-        let mut slice = unsafe { self.RasterBits.with_len_mut(&mut count) };
+        let mut slice = unsafe { self.RasterBits.with_len_vec_mut(&mut count) };
         slice.clear();
         self.extension_blocks_mut().clear();
     }
@@ -319,9 +319,9 @@ impl GifFileType {
         unsafe { self.SavedImages.with_len(self.ImageCount) }
     }
 
-    pub fn saved_images_mut(&mut self) -> CSliceRefMut<'_, SavedImage, c_int> {
+    pub fn saved_images_mut(&mut self) -> CVecRefMut<'_, SavedImage, c_int> {
         // SAFETY: the length of `SavedImages` is `ImageCount`.
-        unsafe { self.SavedImages.with_len_mut(&mut self.ImageCount) }
+        unsafe { self.SavedImages.with_len_vec_mut(&mut self.ImageCount) }
     }
 
     pub fn extension_blocks(&self) -> &[ExtensionBlock] {
@@ -329,9 +329,9 @@ impl GifFileType {
         unsafe { self.ExtensionBlocks.with_len(self.ExtensionBlockCount) }
     }
 
-    pub fn extension_blocks_mut(&mut self) -> CSliceRefMut<'_, ExtensionBlock, c_int> {
+    pub fn extension_blocks_mut(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
-        unsafe { self.ExtensionBlocks.with_len_mut(&mut self.ExtensionBlockCount) }
+        unsafe { self.ExtensionBlocks.with_len_vec_mut(&mut self.ExtensionBlockCount) }
     }
 }
 
