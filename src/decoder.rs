@@ -31,7 +31,7 @@ use crate::private::{GifFilePrivateType, IoState};
 use crate::private_c_types::{DESCRIPTOR_INTRODUCER, EXTENSION_INTRODUCER, TERMINATOR_INTRODUCER};
 use core::ffi::c_int;
 use core::ptr;
-use safer_cffi::CSlicePtr;
+use safer_cffi::CBufPtr;
 
 // ---------------------------------------------------------------------------
 //  Open helpers
@@ -497,7 +497,7 @@ fn buf_payload(buf: &[u8]) -> Option<&[u8]> {
 
 /// Matches DGifSlurp in C. Reads entire GIF into core.
 pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
-    gif.ExtensionBlocks = CSlicePtr::null();
+    gif.ExtensionBlocks = CBufPtr::null();
     gif.ExtensionBlockCount = 0;
 
     loop {
@@ -530,7 +530,7 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
 
                 sp.RasterBits = unsafe {
                     // SAFETY: Rust allocator is compatible with the C allocator.
-                    CSlicePtr::from_raw(
+                    CBufPtr::from_raw(
                         Box::into_raw(vec![0; image_size].into_boxed_slice()) as *mut u8
                     )
                 };
