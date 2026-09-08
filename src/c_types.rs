@@ -33,7 +33,7 @@ pub use crate::c_types_gen::{
     E_GIF_SUCCEEDED, GIF87_STAMP, GIF89_STAMP, GIF_ERROR, GIF_OK, GIF_STAMP, GIF_VERSION_POS,
     GRAPHICS_EXT_FUNC_CODE, NO_TRANSPARENT_COLOR, PLAINTEXT_EXT_FUNC_CODE,
 };
-use safer_cffi::{CSlicePtr, CVecRefMut};
+use safer_cffi::{CBufPtr, CVecRefMut};
 use std::os::raw::c_int;
 use std::os::raw::c_uchar;
 use std::os::raw::c_uint;
@@ -58,7 +58,7 @@ pub struct ColorMapObject {
     pub BitsPerPixel: c_int,
     pub SortFlag: bool,
     // Safety invariant: the length of this array is `ColorCount`.
-    pub Colors: CSlicePtr<GifColorType>,
+    pub Colors: CBufPtr<GifColorType>,
 }
 
 // Array accessors
@@ -86,7 +86,7 @@ impl Clone for ColorMapObject {
             ColorCount: self.ColorCount,
             BitsPerPixel: self.BitsPerPixel,
             SortFlag: self.SortFlag,
-            Colors: CSlicePtr::clone_and_leak(self.colors()),
+            Colors: CBufPtr::clone_and_leak(self.colors()),
         }
     }
 }
@@ -121,7 +121,7 @@ impl ColorMapObject {
             ColorCount: color_count,
             BitsPerPixel: bits,
             SortFlag: false,
-            Colors: CSlicePtr::clone_and_leak(src),
+            Colors: CBufPtr::clone_and_leak(src),
         })
     }
 }
@@ -150,7 +150,7 @@ pub struct GifImageDesc {
 pub struct ExtensionBlock {
     pub ByteCount: c_int,
     // Safety invariant: the length of this array is `ByteCount`.
-    pub Bytes: CSlicePtr<GifByteType>,
+    pub Bytes: CBufPtr<GifByteType>,
     pub Function: c_int,
 }
 
@@ -177,7 +177,7 @@ impl Clone for ExtensionBlock {
     fn clone(&self) -> Self {
         Self {
             ByteCount: self.ByteCount,
-            Bytes: CSlicePtr::clone_and_leak(self.bytes()),
+            Bytes: CBufPtr::clone_and_leak(self.bytes()),
             Function: self.Function,
         }
     }
@@ -185,8 +185,7 @@ impl Clone for ExtensionBlock {
 
 impl ExtensionBlock {
     pub fn new(function: c_int, data: &[u8]) -> Self {
-        let bytes =
-            if data.is_empty() { CSlicePtr::null() } else { CSlicePtr::clone_and_leak(data) };
+        let bytes = if data.is_empty() { CBufPtr::null() } else { CBufPtr::clone_and_leak(data) };
         Self { Function: function, ByteCount: data.len() as c_int, Bytes: bytes }
     }
 }
@@ -201,10 +200,10 @@ pub struct SavedImage {
     pub ImageDesc: GifImageDesc,
     // Safety invariant: When the image dimensions are valid (1..=65535), the length of this array
     // is `SavedImage::size`, which is equal to `ImageDesc.Width * ImageDesc.Height`.
-    pub RasterBits: CSlicePtr<GifByteType>,
+    pub RasterBits: CBufPtr<GifByteType>,
     pub ExtensionBlockCount: c_int,
     // Safety invariant: the length of this array is `ExtensionBlockCount`.
-    pub ExtensionBlocks: CSlicePtr<ExtensionBlock>,
+    pub ExtensionBlocks: CBufPtr<ExtensionBlock>,
 }
 
 // Array accessors
@@ -270,9 +269,9 @@ impl Clone for SavedImage {
     fn clone(&self) -> Self {
         Self {
             ImageDesc: self.ImageDesc.clone(),
-            RasterBits: CSlicePtr::clone_and_leak(self.raster_bits()),
+            RasterBits: CBufPtr::clone_and_leak(self.raster_bits()),
             ExtensionBlockCount: self.ExtensionBlockCount,
-            ExtensionBlocks: CSlicePtr::clone_and_leak(self.extension_blocks()),
+            ExtensionBlocks: CBufPtr::clone_and_leak(self.extension_blocks()),
         }
     }
 }
@@ -281,9 +280,9 @@ impl SavedImage {
     pub fn new(desc: GifImageDesc) -> Self {
         Self {
             ImageDesc: desc,
-            RasterBits: CSlicePtr::null(),
+            RasterBits: CBufPtr::null(),
             ExtensionBlockCount: 0,
-            ExtensionBlocks: CSlicePtr::null(),
+            ExtensionBlocks: CBufPtr::null(),
         }
     }
 }
@@ -303,10 +302,10 @@ pub struct GifFileType {
     pub ImageCount: c_int,
     pub Image: GifImageDesc,
     // Safety invariant: the length of this array is `ImageCount`.
-    pub SavedImages: CSlicePtr<SavedImage>,
+    pub SavedImages: CBufPtr<SavedImage>,
     pub ExtensionBlockCount: c_int,
     // Safety invariant: the length of this array is `ExtensionBlockCount`.
-    pub ExtensionBlocks: CSlicePtr<ExtensionBlock>,
+    pub ExtensionBlocks: CBufPtr<ExtensionBlock>,
     pub Error: c_int,
     pub UserData: UserData,
     pub Private: Box<crate::private::GifFilePrivateType>,
@@ -367,9 +366,9 @@ impl GifFileType {
                 Interlace: false,
                 ColorMap: None,
             },
-            SavedImages: CSlicePtr::null(),
+            SavedImages: CBufPtr::null(),
             ExtensionBlockCount: 0,
-            ExtensionBlocks: CSlicePtr::null(),
+            ExtensionBlocks: CBufPtr::null(),
             Error: 0,
             UserData: UserData(user_data),
             Private: private,
