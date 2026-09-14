@@ -624,7 +624,7 @@ pub unsafe extern "C" fn GifAddExtensionBlock(
     unsafe {
         // Cast through CBufPtr to get the right &mut type.
         let blocks = &mut *(extension_blocks as *mut _ as *mut safer_cffi::CBufPtr<ExtensionBlock>);
-        blocks.with_len_vec_mut(extension_block_count).push_back(block)
+        blocks.as_vec_mut(extension_block_count).push_back(block)
     };
     GIF_OK
 }
@@ -650,7 +650,7 @@ pub unsafe extern "C" fn GifFreeExtensions(
     // SAFETY: the length of `extension_blocks` is `extension_block_count`.
     unsafe {
         let blocks = &mut *(extension_blocks as *mut _ as *mut safer_cffi::CBufPtr<ExtensionBlock>);
-        blocks.with_len_vec_mut(extension_block_count).clear()
+        blocks.as_vec_mut(extension_block_count).clear()
     };
 }
 
