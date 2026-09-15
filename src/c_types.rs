@@ -70,7 +70,7 @@ impl ColorMapObject {
 
     pub fn colors_mut(&mut self) -> CVecRefMut<'_, GifColorType, c_int> {
         // SAFETY: the length of `Colors` is `ColorCount`.
-        unsafe { self.Colors.with_len_vec_mut(&mut self.ColorCount) }
+        unsafe { self.Colors.as_vec_mut(&mut self.ColorCount) }
     }
 }
 
@@ -163,7 +163,7 @@ impl ExtensionBlock {
 
     pub fn bytes_mut(&mut self) -> CVecRefMut<'_, u8, c_int> {
         // SAFETY: the length of `Bytes` is `ByteCount`.
-        unsafe { self.Bytes.with_len_vec_mut(&mut self.ByteCount) }
+        unsafe { self.Bytes.as_vec_mut(&mut self.ByteCount) }
     }
 }
 
@@ -251,7 +251,7 @@ impl SavedImage {
 
     pub fn extension_blocks_mut(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
-        unsafe { self.ExtensionBlocks.with_len_vec_mut(&mut self.ExtensionBlockCount) }
+        unsafe { self.ExtensionBlocks.as_vec_mut(&mut self.ExtensionBlockCount) }
     }
 }
 
@@ -259,7 +259,7 @@ impl Drop for SavedImage {
     fn drop(&mut self) {
         let mut count = self.raster_bits().len() as c_int;
         // SAFETY: By implementation of `.raster_bits()`, `count` is a safe length for `RasterBits`.
-        let mut slice = unsafe { self.RasterBits.with_len_vec_mut(&mut count) };
+        let mut slice = unsafe { self.RasterBits.as_vec_mut(&mut count) };
         slice.clear();
         self.extension_blocks_mut().clear();
     }
@@ -320,7 +320,7 @@ impl GifFileType {
 
     pub fn saved_images_mut(&mut self) -> CVecRefMut<'_, SavedImage, c_int> {
         // SAFETY: the length of `SavedImages` is `ImageCount`.
-        unsafe { self.SavedImages.with_len_vec_mut(&mut self.ImageCount) }
+        unsafe { self.SavedImages.as_vec_mut(&mut self.ImageCount) }
     }
 
     pub fn extension_blocks(&self) -> &[ExtensionBlock] {
@@ -330,7 +330,7 @@ impl GifFileType {
 
     pub fn extension_blocks_mut(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
-        unsafe { self.ExtensionBlocks.with_len_vec_mut(&mut self.ExtensionBlockCount) }
+        unsafe { self.ExtensionBlocks.as_vec_mut(&mut self.ExtensionBlockCount) }
     }
 }
 
