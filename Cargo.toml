@@ -26,7 +26,7 @@ license = "MIT"
 repository = "https://github.com/google/giflib-rs"
 # The version of giflib this is a port of. 
 # The patch component is padded with two digits to allow patch releases for giflib-rs itself.
-version = "6.1.300"  
+version = "6.1.301"  
 edition = "2024"
 
 [dependencies]
