@@ -35,3 +35,6 @@ safer_cffi = "0.2"
 
 [build-dependencies]
 bindgen = "0.72.1"
+
+[patch.crates-io]
+safer_cffi = { git = "https://github.com/google/safer_cffi.git" }
