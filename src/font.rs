@@ -202,6 +202,23 @@ pub(crate) fn gif_draw_text8x8(
     }
 }
 
+/// Write one pixel, discarding it if it falls outside the canvas in either
+/// dimension. Mirrors GifPutPixelClipped in gif_font.c.
+fn put_pixel(image: &mut SavedImage, x: c_int, y: c_int, color: c_int) {
+    let width = image.ImageDesc.Width as usize;
+    let height = image.ImageDesc.Height as usize;
+    if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
+        return;
+    }
+    let Some(idx) = (y as usize).checked_mul(width).and_then(|v| v.checked_add(x as usize)) else {
+        return;
+    };
+    let raster = image.raster_bits_mut();
+    if idx < raster.len() {
+        raster[idx] = color as GifByteType;
+    }
+}
+
 /// Draw the outline of a rectangle.
 pub(crate) fn gif_draw_box(
     image: &mut SavedImage,
@@ -211,46 +228,25 @@ pub(crate) fn gif_draw_box(
     d: c_int,
     color: c_int,
 ) {
-    if x < 0 || y < 0 || w <= 0 || d <= 0 {
+    if w < 0 || d < 0 {
         return;
     }
-    let width = image.ImageDesc.Width as usize;
-    let raster = image.raster_bits_mut();
-    let Some(base) = width.checked_mul(y as usize).and_then(|v| v.checked_add(x as usize)) else {
-        return;
-    };
 
     // Top and bottom edges
-    for j in 0..w as usize {
-        if let Some(top) = base.checked_add(j) {
-            if top < raster.len() {
-                raster[top] = color as GifByteType;
-            }
-        }
-        if let Some(bottom) = (d as usize)
-            .checked_mul(width)
-            .and_then(|v| base.checked_add(v))
-            .and_then(|v| v.checked_add(j))
-        {
-            if bottom < raster.len() {
-                raster[bottom] = color as GifByteType;
+    for j in 0..=w {
+        if x <= c_int::MAX - j {
+            put_pixel(image, x + j, y, color);
+            if y <= c_int::MAX - d {
+                put_pixel(image, x + j, y + d, color);
             }
         }
     }
     // Left and right edges
-    for j in 0..d as usize {
-        if let Some(left) = j.checked_mul(width).and_then(|v| base.checked_add(v)) {
-            if left < raster.len() {
-                raster[left] = color as GifByteType;
-            }
-        }
-        if let Some(right) = j
-            .checked_mul(width)
-            .and_then(|v| base.checked_add(v))
-            .and_then(|v| v.checked_add(w as usize))
-        {
-            if right < raster.len() {
-                raster[right] = color as GifByteType;
+    for j in 0..=d {
+        if y <= c_int::MAX - j {
+            put_pixel(image, x, y + j, color);
+            if x <= c_int::MAX - w {
+                put_pixel(image, x + w, y + j, color);
             }
         }
     }
