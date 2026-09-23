@@ -531,7 +531,7 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                 sp.RasterBits = unsafe {
                     // SAFETY: Rust allocator is compatible with the C allocator.
                     CBufPtr::from_raw(
-                        Box::into_raw(vec![0; image_size].into_boxed_slice()) as *mut u8
+                        Box::into_raw(vec![0u8; image_size].into_boxed_slice()) as *mut u8
                     )
                 };
 
