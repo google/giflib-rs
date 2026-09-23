@@ -24,7 +24,9 @@ name = "giflib-rs"
 description = "An AI-assisted port of giflib to Rust."
 license = "MIT"
 repository = "https://github.com/google/giflib-rs"
-version = "6.1.3"  # The version of giflib this is a port of.
+# The version of giflib this is a port of. 
+# The patch component is padded with two digits to allow patch releases for giflib-rs itself.
+version = "6.1.300"  
 edition = "2024"
 
 [dependencies]
@@ -33,3 +35,6 @@ safer_cffi = "0.2"
 
 [build-dependencies]
 bindgen = "0.72.1"
+
+[patch.crates-io]
+safer_cffi = { git = "https://github.com/google/safer_cffi.git" }
