@@ -25,9 +25,13 @@ use std::path::PathBuf;
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // The header lives at the crate root, next to Cargo.toml.
+    // The header lives at the crate root next to Cargo.toml (in GitHub),
+    // or in the parent directory (in google3).
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let header = manifest_dir.join("gif_lib.h");
+    let header = [manifest_dir.join("gif_lib.h"), manifest_dir.join("../gif_lib.h")]
+        .into_iter()
+        .find(|p| p.exists())
+        .expect("Unable to find gif_lib.h");
 
     println!("cargo:rerun-if-changed={}", header.display());
 

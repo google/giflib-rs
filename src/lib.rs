@@ -22,18 +22,6 @@
 //! Giflib Rust reimplementation.
 //! Bug-for-bug compatible drop-in replacement for the C libgif decoder.
 
-#[allow(
-    dead_code,
-    non_upper_case_globals,
-    non_camel_case_types,
-    non_snake_case,
-    clippy::all,
-    improper_ctypes
-)]
-pub(crate) mod c_types_gen {
-  include!(concat!(env!("OUT_DIR"), "/c_types_gen.rs"));
-}
-
 pub(crate) mod c_types;
 
 pub(crate) mod decoder;

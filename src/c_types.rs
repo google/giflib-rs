@@ -20,7 +20,12 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-pub use crate::c_types_gen::{
+#[allow(nonstandard_style)]
+mod c_types_gen {
+    include!(concat!(env!("OUT_DIR"), "/c_types_gen.rs"));
+}
+
+pub use c_types_gen::{
     GifByteType, GifColorType, GifPixelType, GifPrefixType, GifRecordType, GifWord,
     GraphicsControlBlock, InputFunc, OutputFunc, APPLICATION_EXT_FUNC_CODE, COMMENT_EXT_FUNC_CODE,
     CONTINUE_EXT_FUNC_CODE, DISPOSAL_UNSPECIFIED, D_GIF_ERR_CLOSE_FAILED, D_GIF_ERR_DATA_TOO_BIG,
@@ -233,8 +238,8 @@ impl SavedImage {
         // SAFETY:
         // - RasterBits is not null and has length `size` (dimensions validated by
         //   `SavedImage::size`).
-        // - `SavedImage` owns the underlying array, so the pointer is valid for
-        //   reads and writes as long as we borrow it via `&mut self`.
+        // - `SavedImage` owns the underlying array, so the pointer is valid for reads and writes as
+        //   long as we borrow it via `&mut self`.
         unsafe { core::slice::from_raw_parts_mut(self.RasterBits.as_ptr(), size as usize) }
     }
 
@@ -407,8 +412,8 @@ unsafe impl Send for UserData {}
 /// # Safety Invariants
 ///
 /// - The function pointer is valid for the lifetime of `self`.
-/// - The function pointer is safe to call with a valid `GifFileType*` and buffer arguments,
-///   i.e. if `*mut GifByteType` is a valid pointer to a writable buffer of at least the given size.
+/// - The function pointer is safe to call with a valid `GifFileType*` and buffer arguments, i.e. if
+///   `*mut GifByteType` is a valid pointer to a writable buffer of at least the given size.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReadCallback(
     unsafe extern "C" fn(*mut GifFileType, *mut GifByteType, c_int) -> c_int,
@@ -419,13 +424,13 @@ impl ReadCallback {
     /// The caller must guarantee the function pointer upholds the struct's safety invariants.
     #[rustfmt::skip]
     pub(crate) unsafe fn new(
-        func: unsafe extern "C" fn(*mut crate::c_types_gen::GifFileType, *mut GifByteType, c_int) -> c_int,
+        func: unsafe extern "C" fn(*mut c_types_gen::GifFileType, *mut GifByteType, c_int) -> c_int,
     ) -> Self {
         // SAFETY: `c_types_gen::InputFunc` uses `c_types_gen::GifFileType` for the first argument,
         // but we want to use our own layout-identical `c_types::GifFileType`.
         let func = unsafe {
             core::mem::transmute::<
-                unsafe extern "C" fn(*mut crate::c_types_gen::GifFileType, *mut GifByteType, c_int) -> c_int,
+                unsafe extern "C" fn(*mut c_types_gen::GifFileType, *mut GifByteType, c_int) -> c_int,
                 unsafe extern "C" fn(*mut crate::c_types::GifFileType, *mut GifByteType, c_int) -> c_int,
             >(func)
         };
@@ -445,8 +450,8 @@ impl ReadCallback {
 /// # Safety Invariants
 ///
 /// - The function pointer is valid for the lifetime of the GIF handle.
-/// - The function pointer is safe to call with a valid `GifFileType*` and buffer arguments,
-///   i.e. `*const GifByteType` is a valid pointer to a readable buffer of at least the given size.
+/// - The function pointer is safe to call with a valid `GifFileType*` and buffer arguments, i.e.
+///   `*const GifByteType` is a valid pointer to a readable buffer of at least the given size.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WriteCallback(
     unsafe extern "C" fn(*mut GifFileType, *const GifByteType, c_int) -> c_int,
@@ -457,13 +462,13 @@ impl WriteCallback {
     /// The caller must guarantee the function pointer upholds the struct's safety invariants.
     #[rustfmt::skip]
     pub(crate) unsafe fn new(
-        func: unsafe extern "C" fn(*mut crate::c_types_gen::GifFileType, *const GifByteType, c_int) -> c_int,
+        func: unsafe extern "C" fn(*mut c_types_gen::GifFileType, *const GifByteType, c_int) -> c_int,
     ) -> Self {
         // SAFETY: `c_types_gen::OutputFunc` uses `c_types_gen::GifFileType` for the first argument,
         // but we want to use our own layout-identical `c_types::GifFileType`.
         let func = unsafe {
             core::mem::transmute::<
-                unsafe extern "C" fn(*mut crate::c_types_gen::GifFileType, *const GifByteType, c_int) -> c_int,
+                unsafe extern "C" fn(*mut c_types_gen::GifFileType, *const GifByteType, c_int) -> c_int,
                 unsafe extern "C" fn(*mut crate::c_types::GifFileType, *const GifByteType, c_int) -> c_int,
             >(func)
         };
