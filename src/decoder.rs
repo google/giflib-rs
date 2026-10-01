@@ -31,7 +31,7 @@ use crate::private::{GifFilePrivateType, IoState};
 use crate::private_c_types::{DESCRIPTOR_INTRODUCER, EXTENSION_INTRODUCER, TERMINATOR_INTRODUCER};
 use core::ffi::c_int;
 use core::ptr;
-use safer_cffi::CBufPtr;
+use safer_cffi::{CBufPtr, CVec, LibcAlloc};
 
 // ---------------------------------------------------------------------------
 //  Open helpers
@@ -528,12 +528,10 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                     return Err(GifError::DDataTooBig);
                 }
 
-                sp.RasterBits = unsafe {
-                    // SAFETY: Rust allocator is compatible with the C allocator.
-                    CBufPtr::from_raw(
-                        Box::into_raw(vec![0u8; image_size].into_boxed_slice()) as *mut u8
-                    )
-                };
+                let mut raster = CVec::new_in(LibcAlloc);
+                raster.try_reserve_exact(image_size).map_err(|_| GifError::DNotEnoughMem)?;
+                raster.resize(image_size, 0);
+                sp.RasterBits = CBufPtr::from_boxed_slice(raster.into_boxed_slice());
 
                 if sp.ImageDesc.Interlace {
                     static INTERLACED_OFFSET: [c_int; 4] = [0, 4, 2, 1];
