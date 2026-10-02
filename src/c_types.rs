@@ -1,4 +1,4 @@
-#![allow(unused, nonstandard_style)]
+#![allow(nonstandard_style)]
 // Copyright (c) 1997-2025 Eric S. Raymond
 // Copyright (c) 2026 Google LLC
 //
@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#[allow(nonstandard_style)]
+#[allow(unused, nonstandard_style)]
 mod c_types_gen {
     include!(concat!(env!("OUT_DIR"), "/c_types_gen.rs"));
 }
@@ -40,8 +40,6 @@ pub use c_types_gen::{
 };
 use safer_cffi::{CBufPtr, CVecRefMut};
 use std::os::raw::c_int;
-use std::os::raw::c_uchar;
-use std::os::raw::c_uint;
 use std::os::raw::c_void;
 
 // Box<T> / Option<Box<T>> for single-element pointers (auto-drop)
