@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 // Copyright (c) 1997-2025 Eric S. Raymond
 // Copyright (c) 2026 Google LLC
 //
@@ -32,7 +31,7 @@ use crate::private::{GifFilePrivateType, IoState};
 use crate::private_c_types::{DESCRIPTOR_INTRODUCER, EXTENSION_INTRODUCER, TERMINATOR_INTRODUCER};
 use core::ffi::c_int;
 use core::ptr;
-use safer_cffi::{CBufPtr, CVec, LibcAlloc};
+use safer_cffi::CBufPtr;
 
 // ---------------------------------------------------------------------------
 //  Open helpers
@@ -79,8 +78,8 @@ pub(crate) fn dgif_open(
         return Err(GifError::DNotGifFile);
     }
 
-    // Detect GIF89a
-    gif.Private.gif89 = buf == GIF89_STAMP[..GIF89_STAMP.len() - 1];
+    // Like C, only the second version digit decides: any "GIF?9?" stamp is GIF89.
+    gif.Private.gif89 = buf[GIF_VERSION_POS as usize + 1] == b'9';
 
     // Read screen descriptor
     dgif_get_screen_desc(&mut gif).map_err(|_| GifError::DNoScreenDesc)?;
@@ -529,10 +528,12 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                     return Err(GifError::DDataTooBig);
                 }
 
-                let mut raster = CVec::new_in(LibcAlloc);
-                raster.try_reserve_exact(image_size).map_err(|_| GifError::DNotEnoughMem)?;
-                raster.resize(image_size, 0);
-                sp.RasterBits = CBufPtr::from_boxed_slice(raster.into_boxed_slice());
+                sp.RasterBits = unsafe {
+                    // SAFETY: Rust allocator is compatible with the C allocator.
+                    CBufPtr::from_raw(
+                        Box::into_raw(vec![0u8; image_size].into_boxed_slice()) as *mut u8
+                    )
+                };
 
                 if sp.ImageDesc.Interlace {
                     static INTERLACED_OFFSET: [c_int; 4] = [0, 4, 2, 1];

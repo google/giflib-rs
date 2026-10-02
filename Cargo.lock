@@ -209,7 +209,7 @@ checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 [[package]]
 name = "safer_cffi"
 version = "0.2.0"
-source = "git+https://github.com/google/safer_cffi.git#b0eeeb268783c803759dc9dcd78225aead853cff"
+source = "git+https://github.com/google/safer_cffi.git#45f131b3e1c4ae8109fef77b573e3f8ce3416b60"
 dependencies = [
  "allocator-api2",
  "libc",
