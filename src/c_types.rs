@@ -38,12 +38,12 @@ pub use c_types_gen::{
     E_GIF_SUCCEEDED, GIF87_STAMP, GIF89_STAMP, GIF_ERROR, GIF_OK, GIF_STAMP, GIF_VERSION_POS,
     GRAPHICS_EXT_FUNC_CODE, NO_TRANSPARENT_COLOR, PLAINTEXT_EXT_FUNC_CODE,
 };
-use safer_cffi::{CBufPtr, CVecRefMut};
+use safer_cffi::{CBufPtr, CVecRefMut, OwnedCBufPtr};
 use std::os::raw::c_int;
 use std::os::raw::c_void;
 
 // Box<T> / Option<Box<T>> for single-element pointers (auto-drop)
-// *mut T for array pointers (manual Drop)
+// CBufPtr<T> / OwnedCBufPtr<T> for array pointers
 //
 // # Raw Slice Memory Invariant
 //
@@ -61,7 +61,7 @@ pub struct ColorMapObject {
     pub BitsPerPixel: c_int,
     pub SortFlag: bool,
     // Safety invariant: the length of this array is `ColorCount`.
-    pub Colors: CBufPtr<GifColorType>,
+    pub Colors: OwnedCBufPtr<GifColorType>,
 }
 
 // Array accessors
@@ -71,15 +71,9 @@ impl ColorMapObject {
         unsafe { self.Colors.with_len(self.ColorCount) }
     }
 
-    pub fn colors_mut(&mut self) -> CVecRefMut<'_, GifColorType, c_int> {
+    pub fn colors_mut(&mut self) -> &mut [GifColorType] {
         // SAFETY: the length of `Colors` is `ColorCount`.
-        unsafe { self.Colors.as_vec_mut(&mut self.ColorCount) }
-    }
-}
-
-impl Drop for ColorMapObject {
-    fn drop(&mut self) {
-        self.colors_mut().clear();
+        unsafe { self.Colors.with_len_mut(self.ColorCount) }
     }
 }
 
@@ -89,7 +83,7 @@ impl Clone for ColorMapObject {
             ColorCount: self.ColorCount,
             BitsPerPixel: self.BitsPerPixel,
             SortFlag: self.SortFlag,
-            Colors: CBufPtr::clone_and_leak(self.colors()),
+            Colors: OwnedCBufPtr::clone_from_slice(self.colors()),
         }
     }
 }
@@ -115,17 +109,13 @@ impl ColorMapObject {
     ///
     /// `src.len()` must be > 0 and a power of 2.
     pub fn from_slice(src: &[GifColorType]) -> Result<Self, InvalidColorCount> {
-        let color_count = src.len() as c_int;
+        let color_count = c_int::try_from(src.len()).map_err(|_| InvalidColorCount)?;
         let bits = Self::bit_size(color_count);
-        if color_count <= 0 || color_count != (1 << bits) {
+        if color_count != (1 << bits) {
             return Err(InvalidColorCount);
         }
-        Ok(Self {
-            ColorCount: color_count,
-            BitsPerPixel: bits,
-            SortFlag: false,
-            Colors: CBufPtr::clone_and_leak(src),
-        })
+        let colors = OwnedCBufPtr::try_clone_from_slice(src).map_err(|_| InvalidColorCount)?;
+        Ok(Self { ColorCount: color_count, BitsPerPixel: bits, SortFlag: false, Colors: colors })
     }
 }
 
@@ -153,7 +143,7 @@ pub struct GifImageDesc {
 pub struct ExtensionBlock {
     pub ByteCount: c_int,
     // Safety invariant: the length of this array is `ByteCount`.
-    pub Bytes: CBufPtr<GifByteType>,
+    pub Bytes: OwnedCBufPtr<GifByteType>,
     pub Function: c_int,
 }
 
@@ -164,15 +154,9 @@ impl ExtensionBlock {
         unsafe { self.Bytes.with_len(self.ByteCount) }
     }
 
-    pub fn bytes_mut(&mut self) -> CVecRefMut<'_, u8, c_int> {
+    pub fn bytes_mut(&mut self) -> &mut [u8] {
         // SAFETY: the length of `Bytes` is `ByteCount`.
-        unsafe { self.Bytes.as_vec_mut(&mut self.ByteCount) }
-    }
-}
-
-impl Drop for ExtensionBlock {
-    fn drop(&mut self) {
-        self.bytes_mut().clear();
+        unsafe { self.Bytes.with_len_mut(self.ByteCount) }
     }
 }
 
@@ -180,16 +164,17 @@ impl Clone for ExtensionBlock {
     fn clone(&self) -> Self {
         Self {
             ByteCount: self.ByteCount,
-            Bytes: CBufPtr::clone_and_leak(self.bytes()),
+            Bytes: OwnedCBufPtr::clone_from_slice(self.bytes()),
             Function: self.Function,
         }
     }
 }
 
 impl ExtensionBlock {
-    pub fn new(function: c_int, data: &[u8]) -> Self {
-        let bytes = if data.is_empty() { CBufPtr::null() } else { CBufPtr::clone_and_leak(data) };
-        Self { Function: function, ByteCount: data.len() as c_int, Bytes: bytes }
+    pub fn try_new(function: c_int, data: &[u8]) -> Result<Self, safer_cffi::AllocError> {
+        let byte_count = c_int::try_from(data.len()).map_err(|_| safer_cffi::AllocError)?;
+        let bytes = OwnedCBufPtr::try_clone_from_slice(data)?;
+        Ok(Self { Function: function, ByteCount: byte_count, Bytes: bytes })
     }
 }
 
@@ -203,7 +188,7 @@ pub struct SavedImage {
     pub ImageDesc: GifImageDesc,
     // Safety invariant: When the image dimensions are valid (1..=65535), the length of this array
     // is `SavedImage::size`, which is equal to `ImageDesc.Width * ImageDesc.Height`.
-    pub RasterBits: CBufPtr<GifByteType>,
+    pub RasterBits: OwnedCBufPtr<GifByteType>,
     pub ExtensionBlockCount: c_int,
     // Safety invariant: the length of this array is `ExtensionBlockCount`.
     pub ExtensionBlocks: CBufPtr<ExtensionBlock>,
@@ -223,22 +208,15 @@ impl SavedImage {
     pub fn raster_bits(&self) -> &[u8] {
         let size = self.size().unwrap_or(0);
         // SAFETY: the length of `RasterBits` is `SavedImage::size`.
+        // `CBufPtr::with_len` only has safety preconditions if size > 0.
         unsafe { self.RasterBits.with_len(size) }
     }
 
     pub fn raster_bits_mut(&mut self) -> &mut [u8] {
-        if self.RasterBits.is_null() {
-            return &mut [];
-        }
-        let Some(size) = self.size() else {
-            return &mut [];
-        };
-        // SAFETY:
-        // - RasterBits is not null and has length `size` (dimensions validated by
-        //   `SavedImage::size`).
-        // - `SavedImage` owns the underlying array, so the pointer is valid for reads and writes as
-        //   long as we borrow it via `&mut self`.
-        unsafe { core::slice::from_raw_parts_mut(self.RasterBits.as_ptr(), size as usize) }
+        let size = self.size().unwrap_or(0);
+        // SAFETY: the length of `RasterBits` is `SavedImage::size`.
+        // `CBufPtr::with_len_mut` only has safety preconditions if size > 0.
+        unsafe { self.RasterBits.with_len_mut(size) }
     }
 
     pub fn raster_bits_row_mut(&mut self, row: usize) -> Option<&mut [u8]> {
@@ -252,7 +230,12 @@ impl SavedImage {
         unsafe { self.ExtensionBlocks.with_len(self.ExtensionBlockCount) }
     }
 
-    pub fn extension_blocks_mut(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
+    pub fn extension_blocks_mut(&mut self) -> &mut [ExtensionBlock] {
+        // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
+        unsafe { self.ExtensionBlocks.with_len_mut(self.ExtensionBlockCount) }
+    }
+
+    pub fn extension_blocks_vec(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
         unsafe { self.ExtensionBlocks.as_vec_mut(&mut self.ExtensionBlockCount) }
     }
@@ -260,11 +243,7 @@ impl SavedImage {
 
 impl Drop for SavedImage {
     fn drop(&mut self) {
-        let mut count = self.raster_bits().len() as c_int;
-        // SAFETY: By implementation of `.raster_bits()`, `count` is a safe length for `RasterBits`.
-        let mut slice = unsafe { self.RasterBits.as_vec_mut(&mut count) };
-        slice.clear();
-        self.extension_blocks_mut().clear();
+        self.extension_blocks_vec().clear();
     }
 }
 
@@ -272,7 +251,7 @@ impl Clone for SavedImage {
     fn clone(&self) -> Self {
         Self {
             ImageDesc: self.ImageDesc.clone(),
-            RasterBits: CBufPtr::clone_and_leak(self.raster_bits()),
+            RasterBits: OwnedCBufPtr::clone_from_slice(self.raster_bits()),
             ExtensionBlockCount: self.ExtensionBlockCount,
             ExtensionBlocks: CBufPtr::clone_and_leak(self.extension_blocks()),
         }
@@ -283,7 +262,7 @@ impl SavedImage {
     pub fn new(desc: GifImageDesc) -> Self {
         Self {
             ImageDesc: desc,
-            RasterBits: CBufPtr::null(),
+            RasterBits: OwnedCBufPtr::null(),
             ExtensionBlockCount: 0,
             ExtensionBlocks: CBufPtr::null(),
         }
@@ -321,7 +300,12 @@ impl GifFileType {
         unsafe { self.SavedImages.with_len(self.ImageCount) }
     }
 
-    pub fn saved_images_mut(&mut self) -> CVecRefMut<'_, SavedImage, c_int> {
+    pub fn saved_images_mut(&mut self) -> &mut [SavedImage] {
+        // SAFETY: the length of `SavedImages` is `ImageCount`.
+        unsafe { self.SavedImages.with_len_mut(self.ImageCount) }
+    }
+
+    pub fn saved_images_vec(&mut self) -> CVecRefMut<'_, SavedImage, c_int> {
         // SAFETY: the length of `SavedImages` is `ImageCount`.
         unsafe { self.SavedImages.as_vec_mut(&mut self.ImageCount) }
     }
@@ -331,7 +315,7 @@ impl GifFileType {
         unsafe { self.ExtensionBlocks.with_len(self.ExtensionBlockCount) }
     }
 
-    pub fn extension_blocks_mut(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
+    pub fn extension_blocks_vec(&mut self) -> CVecRefMut<'_, ExtensionBlock, c_int> {
         // SAFETY: the length of `ExtensionBlocks` is `ExtensionBlockCount`.
         unsafe { self.ExtensionBlocks.as_vec_mut(&mut self.ExtensionBlockCount) }
     }
@@ -339,8 +323,8 @@ impl GifFileType {
 
 impl Drop for GifFileType {
     fn drop(&mut self) {
-        self.saved_images_mut().clear();
-        self.extension_blocks_mut().clear();
+        self.saved_images_vec().clear();
+        self.extension_blocks_vec().clear();
     }
 }
 

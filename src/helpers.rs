@@ -51,7 +51,7 @@ impl ColorMapObject {
 
         let max_count = self.ColorCount.max(other.ColorCount).checked_mul(2)?;
         let mut color_union = ColorMapObject::new(max_count).ok()?;
-        let mut cu_colors = color_union.colors_mut();
+        let cu_colors = color_union.colors_mut();
 
         cu_colors[..c1_colors.len()].copy_from_slice(c1_colors);
 
@@ -92,17 +92,14 @@ impl ColorMapObject {
         let zero = GifColorType { Red: 0, Green: 0, Blue: 0 };
         cu_colors[crnt_slot..round_up_to].fill(zero);
 
-        // If the final count differs from the allocation size, reallocate to
-        // the correct size so that Drop (which uses ColorCount as the
-        // deallocation length) doesn't cause an allocator layout mismatch.
+        // C shrinks the colors array to the final count. Copy into a right-sized map so that
+        // `Colors` holds exactly `ColorCount` entries.
         if round_up_to != max_count as usize {
             let mut result = ColorMapObject::from_slice(&cu_colors[..round_up_to]).ok()?;
             result.BitsPerPixel = new_bit_size;
             return Some(result);
         }
 
-        // Drop the CVecRefMut before accessing color_union fields directly.
-        drop(cu_colors);
         color_union.ColorCount = round_up_to as c_int;
         color_union.BitsPerPixel = new_bit_size;
         Some(color_union)

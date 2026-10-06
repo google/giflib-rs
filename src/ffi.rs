@@ -38,7 +38,7 @@ use crate::font;
 use crate::quantize;
 use core::ffi::{c_char, c_int, c_uint, c_void};
 use core::ptr;
-use safer_cffi::CStrRef;
+use safer_cffi::{CBufPtr, CStrRef};
 
 // ---------------------------------------------------------------------------
 //  Open
@@ -74,8 +74,8 @@ pub extern "C" fn DGifOpenFileName(
 ///
 /// # Safety
 ///
-/// * file_handle must be a valid, opened file descriptor and ownership must be passed as
-///   part of this method call.
+/// * file_handle must be a valid, opened file descriptor and ownership must be passed as part of
+///   this method call.
 unsafe fn make_file(file_handle: c_int) -> Option<std::fs::File> {
     #[cfg(unix)]
     {
@@ -516,7 +516,8 @@ pub unsafe extern "C" fn GifMakeMapObject(
     let result = if color_map.is_null() || color_count <= 0 {
         ColorMapObject::new(color_count)
     } else {
-        // SAFETY: `color_map` is non-null (checked above), caller guarantees it points to at least `color_count` elements.
+        // SAFETY: `color_map` is non-null (checked above), caller guarantees it points to at least
+        // `color_count` elements.
         let src = unsafe { core::slice::from_raw_parts(color_map, color_count as usize) };
         ColorMapObject::from_slice(src)
     };
@@ -588,14 +589,14 @@ pub extern "C" fn GifApplyTranslation(
 ///
 /// # Safety
 ///
-/// Caller must guarantee that `ext_data` points to a buffer of at least
+/// If `ext_data` is non-null, it must point to a buffer of at least
 /// `len` bytes that is valid for reads for the duration of the function call.
-/// `extension_blocks` must point to a valid array of `ExtensionBlock` of at least
-/// `extension_block_count` elements for the duration of the function call.
+/// `*extension_blocks` must be null or a malloc-allocated array of `*extension_block_count`
+/// initialized `ExtensionBlock`s.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifAddExtensionBlock(
     extension_block_count: Option<&mut c_int>,
-    extension_blocks: Option<&mut *mut ExtensionBlock>,
+    extension_blocks: Option<&mut CBufPtr<ExtensionBlock>>,
     function: c_int,
     len: c_uint,
     ext_data: *mut u8,
@@ -606,6 +607,10 @@ pub unsafe extern "C" fn GifAddExtensionBlock(
     let Some(extension_blocks) = extension_blocks else {
         return GIF_ERROR;
     };
+    // `ByteCount` is a `c_int`: reject longer blocks before allocating anything for them.
+    if c_int::try_from(len).is_err() {
+        return GIF_ERROR;
+    }
     let zero_buf;
     let data: &[u8] = if ext_data.is_null() || len == 0 {
         if len > 0 {
@@ -619,27 +624,26 @@ pub unsafe extern "C" fn GifAddExtensionBlock(
         // SAFETY: caller guarantees ext_data points to at least `len` bytes.
         unsafe { core::slice::from_raw_parts(ext_data, len as usize) }
     };
-    let block = ExtensionBlock::new(function, data);
-    // SAFETY: the length of `*extension_blocks` is `*extension_block_count`.
-    unsafe {
-        // Cast through CBufPtr to get the right &mut type.
-        let blocks = &mut *(extension_blocks as *mut _ as *mut safer_cffi::CBufPtr<ExtensionBlock>);
-        blocks.as_vec_mut(extension_block_count).push_back(block)
+    let Ok(block) = ExtensionBlock::try_new(function, data) else {
+        return GIF_ERROR;
     };
-    GIF_OK
+    // SAFETY: the length of `*extension_blocks` is `*extension_block_count`.
+    match unsafe { extension_blocks.as_vec_mut(extension_block_count) }.try_push_back(block) {
+        Ok(()) => GIF_OK,
+        Err(_) => GIF_ERROR,
+    }
 }
 
 /// GifFreeExtensions — free the memory allocated for the extension blocks.
 ///
 /// # Safety
 ///
-/// Caller must guarantee that `extension_blocks` points to a valid array of
-/// `ExtensionBlock` of at least `extension_block_count` elements for the duration
-/// of the function call.
+/// `*extension_blocks` must be null or a malloc-allocated array of `*extension_block_count`
+/// initialized `ExtensionBlock`s.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifFreeExtensions(
     extension_block_count: Option<&mut c_int>,
-    extension_blocks: Option<&mut *mut ExtensionBlock>,
+    extension_blocks: Option<&mut CBufPtr<ExtensionBlock>>,
 ) {
     let Some(extension_block_count) = extension_block_count else {
         return;
@@ -647,11 +651,8 @@ pub unsafe extern "C" fn GifFreeExtensions(
     let Some(extension_blocks) = extension_blocks else {
         return;
     };
-    // SAFETY: the length of `extension_blocks` is `extension_block_count`.
-    unsafe {
-        let blocks = &mut *(extension_blocks as *mut _ as *mut safer_cffi::CBufPtr<ExtensionBlock>);
-        blocks.as_vec_mut(extension_block_count).clear()
-    };
+    // SAFETY: the length of `*extension_blocks` is `*extension_block_count`.
+    unsafe { extension_blocks.as_vec_mut(extension_block_count) }.clear();
 }
 
 #[unsafe(no_mangle)]
@@ -676,7 +677,7 @@ pub extern "C" fn GifMakeSavedImage(
         })
     };
 
-    gif.saved_images_mut().push_back(sp);
+    gif.saved_images_vec().push_back(sp);
 
     // Return pointer to the newly added last element.
     gif.saved_images_mut().last_mut().expect("saved_images should have at least one element")
@@ -686,7 +687,7 @@ pub extern "C" fn GifMakeSavedImage(
 #[unsafe(no_mangle)]
 pub extern "C" fn GifFreeSavedImages(gif_file: Option<&mut GifFileType>) {
     if let Some(gif) = gif_file {
-        gif.saved_images_mut().clear();
+        gif.saved_images_vec().clear();
     }
 }
 

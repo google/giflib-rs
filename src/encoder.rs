@@ -555,7 +555,6 @@ pub fn egif_gcb_to_saved_extension(
     if image_index < 0 || image_index > gif.ImageCount - 1 {
         return Err(GifError::ENotWriteable); // C returns GIF_ERROR without setting specific error
     }
-
     let saved = &mut gif.saved_images_mut()[image_index as usize];
     for ep in saved.extension_blocks_mut().iter_mut() {
         if ep.Function == GRAPHICS_EXT_FUNC_CODE {
@@ -570,8 +569,9 @@ pub fn egif_gcb_to_saved_extension(
     // No existing GCB block found — add a new one.
     let mut ext = [0u8; 4];
     egif_gcb_to_extension(gcb, &mut ext);
-    saved.extension_blocks_mut().push_back(ExtensionBlock::new(GRAPHICS_EXT_FUNC_CODE, &ext));
-
+    let block = ExtensionBlock::try_new(GRAPHICS_EXT_FUNC_CODE, &ext)
+        .map_err(|_| GifError::ENotEnoughMem)?;
+    saved.extension_blocks_vec().try_push_back(block).map_err(|_| GifError::ENotEnoughMem)?;
     Ok(())
 }
 

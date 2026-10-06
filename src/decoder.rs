@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 // Copyright (c) 1997-2025 Eric S. Raymond
 // Copyright (c) 2026 Google LLC
 //
@@ -31,7 +32,7 @@ use crate::private::{GifFilePrivateType, IoState};
 use crate::private_c_types::{DESCRIPTOR_INTRODUCER, EXTENSION_INTRODUCER, TERMINATOR_INTRODUCER};
 use core::ffi::c_int;
 use core::ptr;
-use safer_cffi::CBufPtr;
+use safer_cffi::{CBufPtr, CVec, LibcAlloc, OwnedCBufPtr};
 
 // ---------------------------------------------------------------------------
 //  Open helpers
@@ -272,7 +273,7 @@ pub fn dgif_get_image_desc(gif: &mut GifFileType) -> Result<(), GifError> {
     // Create new SavedImage locally and initialize.
     let image = SavedImage::new(gif.Image.clone());
 
-    gif.saved_images_mut().push_back(image);
+    gif.saved_images_vec().try_push_back(image).map_err(|_| GifError::DNotEnoughMem)?;
 
     Ok(())
 }
@@ -528,12 +529,10 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                     return Err(GifError::DDataTooBig);
                 }
 
-                sp.RasterBits = unsafe {
-                    // SAFETY: Rust allocator is compatible with the C allocator.
-                    CBufPtr::from_raw(
-                        Box::into_raw(vec![0u8; image_size].into_boxed_slice()) as *mut u8
-                    )
-                };
+                let mut raster = CVec::new_in(LibcAlloc);
+                raster.try_reserve_exact(image_size).map_err(|_| GifError::DNotEnoughMem)?;
+                raster.resize(image_size, 0);
+                sp.RasterBits = OwnedCBufPtr::from_boxed_slice(raster.into_boxed_slice());
 
                 if sp.ImageDesc.Interlace {
                     static INTERLACED_OFFSET: [c_int; 4] = [0, 4, 2, 1];
@@ -555,10 +554,10 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
 
                 // Move pending extension blocks to this image
                 assert!(sp.extension_blocks().is_empty());
-                gif.extension_blocks_mut().swap(&mut sp.extension_blocks_mut());
+                gif.extension_blocks_vec().swap(&mut sp.extension_blocks_vec());
 
                 // Commit the fully-built image.
-                gif.saved_images_mut().push_back(sp);
+                gif.saved_images_vec().try_push_back(sp).map_err(|_| GifError::DNotEnoughMem)?;
             }
             GifRecordType::EXTENSION_RECORD_TYPE => {
                 let mut ext_function: c_int = 0;
@@ -567,8 +566,11 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                 dgif_get_extension(gif, &mut ext_function, &mut ext_data_unused)?;
 
                 if let Some(data) = buf_payload(&gif.Private.lzw.buf) {
-                    let block = ExtensionBlock::new(ext_function, data);
-                    gif.extension_blocks_mut().push_back(block);
+                    let block = ExtensionBlock::try_new(ext_function, data)
+                        .map_err(|_| GifError::DNotEnoughMem)?;
+                    gif.extension_blocks_vec()
+                        .try_push_back(block)
+                        .map_err(|_| GifError::DNotEnoughMem)?;
                 }
 
                 loop {
@@ -579,8 +581,11 @@ pub fn dgif_slurp(gif: &mut GifFileType) -> Result<(), GifError> {
                     let Some(data) = buf_payload(&gif.Private.lzw.buf) else {
                         break;
                     };
-                    let block = ExtensionBlock::new(CONTINUE_EXT_FUNC_CODE, data);
-                    gif.extension_blocks_mut().push_back(block);
+                    let block = ExtensionBlock::try_new(CONTINUE_EXT_FUNC_CODE, data)
+                        .map_err(|_| GifError::DNotEnoughMem)?;
+                    gif.extension_blocks_vec()
+                        .try_push_back(block)
+                        .map_err(|_| GifError::DNotEnoughMem)?;
                 }
             }
             GifRecordType::TERMINATE_RECORD_TYPE => break,
