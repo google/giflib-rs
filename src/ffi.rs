@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 // Copyright (c) 1997-2025 Eric S. Raymond
 // Copyright (c) 2026 Google LLC
 //
@@ -49,22 +50,22 @@ use safer_cffi::{CBufPtr, CStrRef};
 pub extern "C" fn DGifOpenFileName(
     file_name: Option<CStrRef<'_>>,
     error: Option<&mut c_int>,
-) -> *mut GifFileType {
+) -> Option<Box<GifFileType>> {
     let Some(file_name) = file_name else {
         if let Some(error) = error {
             *error = GifError::DOpenFailed as c_int;
         };
-        return ptr::null_mut();
+        return None;
     };
     let c_str = file_name.to_c_str();
     let gif = decoder::dgif_open_file_name(c_str);
     match gif {
-        Ok(gif) => Box::into_raw(gif),
+        Ok(gif) => Some(gif),
         Err(e) => {
             if let Some(error) = error {
                 *error = e as c_int;
             }
-            ptr::null_mut()
+            None
         }
     }
 }
@@ -133,18 +134,18 @@ unsafe fn make_file(file_handle: c_int) -> Option<std::fs::File> {
 pub unsafe extern "C" fn DGifOpenFileHandle(
     file_handle: c_int,
     error: Option<&mut c_int>,
-) -> *mut GifFileType {
+) -> Option<Box<GifFileType>> {
     // SAFETY: Per function contract, `file_handle` is a valid file descriptor.
     let file = unsafe { make_file(file_handle) };
 
     let gif = decoder::dgif_open(file, None, ptr::null_mut());
     match gif {
-        Ok(gif) => Box::into_raw(gif),
+        Ok(gif) => Some(gif),
         Err(e) => {
             if let Some(error) = error {
                 *error = e as c_int;
             }
-            ptr::null_mut()
+            None
         }
     }
 }
@@ -163,12 +164,12 @@ pub unsafe extern "C" fn DGifOpen(
     user_data: *mut c_void,
     read_func: InputFunc,
     error: Option<&mut c_int>,
-) -> *mut GifFileType {
+) -> Option<Box<GifFileType>> {
     if read_func.is_none() {
         if let Some(error) = error {
             *error = GifError::DReadFailed as c_int;
         }
-        return ptr::null_mut();
+        return None;
     }
     let callback = read_func.map(|f| {
         // SAFETY: The caller guarantees that `f` upholds the ReadCallback contract.
@@ -176,12 +177,12 @@ pub unsafe extern "C" fn DGifOpen(
     });
     let gif = decoder::dgif_open(None, callback, user_data);
     match gif {
-        Ok(gif) => Box::into_raw(gif),
+        Ok(gif) => Some(gif),
         Err(e) => {
             if let Some(error) = error {
                 *error = e as c_int;
             }
-            ptr::null_mut()
+            None
         }
     }
 }
@@ -501,30 +502,33 @@ pub extern "C" fn DGifSavedExtensionToGCB(
 
 /// GifMakeMapObject — create a new color map object.
 ///
+/// Returns NULL unless `color_count` is a power of 2 from 2 to 512. The colors are zero if
+/// `color_map` is null.
+///
 /// # Safety
 ///
-/// Caller must guarantee that `color_map` points to a valid array of
-/// `GifColorType` of at least `color_count` elements for the duration of the
-/// function call. If `color_map` is null or `color_count` is less than or
-/// equal to 0, the function will allocate a new color map object with no
-/// colors.
+/// If `color_map` is non-null, it must reside within a single allocated object, point to at least
+/// `color_count` initialized, valid `GifColorType` elements, and not be mutated by any other
+/// pointer or thread for the duration of the function call. Alignment is guaranteed implicitly
+/// by the fact that `GifColorType` is 1-byte aligned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifMakeMapObject(
     color_count: c_int,
     color_map: *const GifColorType,
-) -> *mut ColorMapObject {
-    let result = if color_map.is_null() || color_count <= 0 {
-        ColorMapObject::new(color_count)
-    } else {
-        // SAFETY: `color_map` is non-null (checked above), caller guarantees it points to at least
-        // `color_count` elements.
-        let src = unsafe { core::slice::from_raw_parts(color_map, color_count as usize) };
-        ColorMapObject::from_slice(src)
-    };
-    match result {
-        Ok(m) => Box::into_raw(Box::new(m)),
-        Err(_) => ptr::null_mut(),
+) -> Option<Box<ColorMapObject>> {
+    let mut object = ColorMapObject::new(color_count).ok()?;
+    if !color_map.is_null() {
+        let colors = object.colors_mut();
+        // SAFETY:
+        // - `color_map` is checked non-null above.
+        // - By function `# Safety` contract, `color_map` is aligned (align_of::<GifColorType>() ==
+        //   1), points to at least `color_count` initialized `GifColorType` elements in a single
+        //   allocation, and is not concurrently mutated during the call.
+        // - `colors.len()` equals `color_count` as allocated by `ColorMapObject::new(color_count)`.
+        // - `colors` is a freshly allocated buffer disjoint from `color_map`, so they do not alias.
+        colors.copy_from_slice(unsafe { core::slice::from_raw_parts(color_map, colors.len()) });
     }
+    Some(Box::new(object))
 }
 
 #[unsafe(no_mangle)]
@@ -544,26 +548,24 @@ pub unsafe extern "C" fn GifUnionColorMap(
     color_in1: Option<&ColorMapObject>,
     color_in2: Option<&ColorMapObject>,
     color_trans_in2: *mut GifPixelType,
-) -> *mut ColorMapObject {
-    let Some(color_in1) = color_in1 else {
-        return ptr::null_mut();
-    };
-    let Some(color_in2) = color_in2 else {
-        return ptr::null_mut();
-    };
+) -> Option<Box<ColorMapObject>> {
+    let color_in1 = color_in1?;
+    let color_in2 = color_in2?;
     if color_trans_in2.is_null() {
-        return ptr::null_mut();
+        return None;
     }
+    let trans_len = color_in2.colors().len();
 
-    // SAFETY: null check above; C API contract is that color_trans_in2
-    // points to at least ColorIn2->ColorCount elements.
-    let trans =
-        unsafe { core::slice::from_raw_parts_mut(color_trans_in2, color_in2.ColorCount as usize) };
+    // SAFETY:
+    // - `color_trans_in2` is non-null (checked above) and aligned (`align_of::<GifPixelType>() ==
+    //   1`).
+    // - By C API contract, `color_trans_in2` points to at least `trans_len` elements in a single
+    //   allocation valid for writes.
+    // - The caller guarantees exclusive access to `color_trans_in2` (does not alias `color_in1` or
+    //   `color_in2`).
+    let trans = unsafe { core::slice::from_raw_parts_mut(color_trans_in2, trans_len) };
 
-    match color_in1.union_with(color_in2, trans) {
-        Some(result) => Box::into_raw(Box::new(result)),
-        None => ptr::null_mut(),
-    }
+    color_in1.union_with(color_in2, trans).map(Box::new)
 }
 
 #[unsafe(no_mangle)]
@@ -656,13 +658,11 @@ pub unsafe extern "C" fn GifFreeExtensions(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn GifMakeSavedImage(
-    gif_file: Option<&mut GifFileType>,
+pub extern "C" fn GifMakeSavedImage<'a>(
+    gif_file: Option<&'a mut GifFileType>,
     copy_from: Option<&SavedImage>,
-) -> *mut SavedImage {
-    let Some(gif) = gif_file else {
-        return ptr::null_mut();
-    };
+) -> Option<&'a mut SavedImage> {
+    let gif = gif_file?;
 
     let sp = if let Some(copy_from) = copy_from {
         copy_from.clone()
@@ -677,11 +677,10 @@ pub extern "C" fn GifMakeSavedImage(
         })
     };
 
-    gif.saved_images_vec().push_back(sp);
+    gif.saved_images_vec().try_push_back(sp).ok()?;
 
-    // Return pointer to the newly added last element.
-    gif.saved_images_mut().last_mut().expect("saved_images should have at least one element")
-        as *mut SavedImage
+    // Return reference to the newly added last element.
+    gif.saved_images_mut().last_mut()
 }
 
 #[unsafe(no_mangle)]
@@ -721,22 +720,22 @@ pub extern "C" fn EGifOpenFileName(
     file_name: Option<CStrRef<'_>>,
     gif89: bool,
     error: Option<&mut c_int>,
-) -> *mut GifFileType {
+) -> Option<Box<GifFileType>> {
     let Some(file_name) = file_name else {
         if let Some(error) = error {
             *error = GifError::EOpenFailed as c_int;
         }
-        return ptr::null_mut();
+        return None;
     };
     let c_str = file_name.to_c_str();
     let gif = encoder::egif_open_file_name(c_str, gif89);
     match gif {
-        Ok(gif) => Box::into_raw(gif),
+        Ok(gif) => Some(gif),
         Err(e) => {
             if let Some(error) = error {
                 *error = e as c_int;
             }
-            ptr::null_mut()
+            None
         }
     }
 }
@@ -752,18 +751,18 @@ pub extern "C" fn EGifOpenFileName(
 pub unsafe extern "C" fn EGifOpenFileHandle(
     file_handle: c_int,
     error: Option<&mut c_int>,
-) -> *mut GifFileType {
+) -> Option<Box<GifFileType>> {
     // SAFETY: Per function contract, `file_handle` is a valid file descriptor.
     let file = unsafe { make_file(file_handle) };
 
     let gif = encoder::egif_open(file, None, ptr::null_mut());
     match gif {
-        Ok(gif) => Box::into_raw(gif),
+        Ok(gif) => Some(gif),
         Err(e) => {
             if let Some(error) = error {
                 *error = e as c_int;
             }
-            ptr::null_mut()
+            None
         }
     }
 }
@@ -783,19 +782,19 @@ pub unsafe extern "C" fn EGifOpen(
     user_data: *mut c_void,
     write_func: OutputFunc,
     error: Option<&mut c_int>,
-) -> *mut GifFileType {
+) -> Option<Box<GifFileType>> {
     let callback = write_func.map(|f| {
         // SAFETY: The caller guarantees that `f` upholds the WriteCallback contract.
         unsafe { WriteCallback::new(f) }
     });
     let gif = encoder::egif_open(None, callback, user_data);
     match gif {
-        Ok(gif) => Box::into_raw(gif),
+        Ok(gif) => Some(gif),
         Err(e) => {
             if let Some(error) = error {
                 *error = e as c_int;
             }
-            ptr::null_mut()
+            None
         }
     }
 }
@@ -806,6 +805,7 @@ pub extern "C" fn EGifCloseFile(
     error: Option<&mut c_int>,
 ) -> c_int {
     let Some(mut gif) = gif_file else {
+        // C leaves `*ErrorCode` unset here; reporting an error code is deliberate.
         if let Some(error) = error {
             *error = E_GIF_ERR_CLOSE_FAILED;
         }
