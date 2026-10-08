@@ -95,19 +95,21 @@ pub struct InvalidColorCount;
 impl ColorMapObject {
     /// Create a new zeroed color map.
     ///
-    /// `color_count` must be > 0 and a power of 2.
+    /// `color_count` must be a power of 2 from 2 to 512. Like C's `GifMakeMapObject`, this
+    /// accepts 512 because `GifBitSize` returns 9 for anything above 256, which
+    /// `GifUnionColorMap` relies on for its scratch map when given a 256-color input.
     pub fn new(color_count: c_int) -> Result<Self, InvalidColorCount> {
-        if !(0..=256).contains(&color_count) {
+        if !(0..=512).contains(&color_count) {
             return Err(InvalidColorCount);
         }
-        let stack_colors: [GifColorType; 256] =
+        let stack_colors: [GifColorType; 512] =
             std::array::from_fn(|_| GifColorType { Red: 0, Green: 0, Blue: 0 });
         Self::from_slice(&stack_colors[..color_count as usize])
     }
 
     /// Create a new color map from an existing slice of colors.
     ///
-    /// `src.len()` must be > 0 and a power of 2.
+    /// `src.len()` must be a power of 2 from 2 to 512.
     pub fn from_slice(src: &[GifColorType]) -> Result<Self, InvalidColorCount> {
         let color_count = c_int::try_from(src.len()).map_err(|_| InvalidColorCount)?;
         let bits = Self::bit_size(color_count);

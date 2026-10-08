@@ -61,9 +61,11 @@ impl ColorMapObject {
             .rposition(|c| c.Red != 0 || c.Green != 0 || c.Blue != 0)
             .map_or(0, |i| i + 1);
 
-        // Merge c2 colors (reuse existing where possible)
+        // Merge c2 colors (reuse existing where possible). Like C, stop once the union needs more
+        // than 256 colors and fail below. Writes stay in bounds because `crnt_slot` never exceeds
+        // `c1_colors.len() + c2_colors.len() <= max_count`.
         for (i, c2_color) in c2_colors.iter().enumerate() {
-            if crnt_slot >= max_count as usize {
+            if crnt_slot > 256 {
                 break;
             }
             if let Some(j) = c1_colors.iter().position(|c| {
@@ -77,14 +79,15 @@ impl ColorMapObject {
             }
         }
 
-        if crnt_slot > max_count as usize {
+        if crnt_slot > 256 {
             return None;
         }
 
         let new_bit_size = Self::bit_size(crnt_slot as c_int);
         let round_up_to = 1usize << new_bit_size;
 
-        // Bounds check: the C original has `if (RoundUpTo > MaxCount)` guard.
+        // C relies on `max_count` being a power of two that is at least `crnt_slot`. Check it
+        // rather than panic on the slice below.
         if round_up_to > max_count as usize {
             return None;
         }

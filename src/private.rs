@@ -66,7 +66,9 @@ impl IoState {
     /// For file-based I/O, loops to handle partial reads (matching `fread` behavior).
     pub(crate) fn read(&mut self, gif_ptr: *mut GifFileType, buf: &mut [u8]) -> usize {
         match self {
-            IoState::CallbackRead { read_fn } => read_fn.read(gif_ptr, buf) as usize,
+            IoState::CallbackRead { read_fn } => {
+                usize::try_from(read_fn.read(gif_ptr, buf)).unwrap_or(0)
+            }
             IoState::FileRead { file, .. } => {
                 let mut total = 0usize;
                 while total < buf.len() {
@@ -88,7 +90,9 @@ impl IoState {
     /// For file-based I/O, loops to handle partial writes (matching `fwrite` behavior).
     pub(crate) fn write(&mut self, gif_ptr: *mut GifFileType, buf: &[u8]) -> usize {
         match self {
-            IoState::CallbackWrite { write_fn } => write_fn.write(gif_ptr, buf) as usize,
+            IoState::CallbackWrite { write_fn } => {
+                usize::try_from(write_fn.write(gif_ptr, buf)).unwrap_or(0)
+            }
             IoState::FileWrite { file, .. } => {
                 let mut total = 0usize;
                 while total < buf.len() {
