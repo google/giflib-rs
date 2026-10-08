@@ -176,6 +176,15 @@ pub fn egif_set_gif_version(gif: &mut GifFileType, gif89: bool) {
 //  Screen descriptor
 // ---------------------------------------------------------------------------
 
+/// Represents an argument that may either keep the current field value or provide a new one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arg<T> {
+    /// Keep the value already stored on the struct.
+    Current,
+    /// Set a new value.
+    New(T),
+}
+
 /// Matches EGifPutScreenDesc in C.
 pub fn egif_put_screen_desc(
     gif: &mut GifFileType,
@@ -183,7 +192,7 @@ pub fn egif_put_screen_desc(
     height: c_int,
     color_res: c_int,
     background: c_int,
-    color_map: Option<&ColorMapObject>,
+    color_map: Arg<Option<ColorMapObject>>,
 ) -> Result<(), GifError> {
     if gif.Private.screen_desc_written {
         // If already has screen descriptor - something is wrong!
@@ -210,10 +219,8 @@ pub fn egif_put_screen_desc(
     gif.SColorResolution = color_res as GifWord;
     gif.SBackGroundColor = background as GifWord;
 
-    if let Some(cm) = color_map {
-        gif.SColorMap = Some(Box::new(cm.clone()));
-    } else {
-        gif.SColorMap = None;
+    if let Arg::New(color_map) = color_map {
+        gif.SColorMap = color_map.map(Box::new);
     }
 
     // Put the logical screen descriptor into the file:
@@ -222,14 +229,15 @@ pub fn egif_put_screen_desc(
     egif_put_word(gif, height)?;
 
     // Logical Screen Descriptor: Packed Fields
-    let mut packed: u8 = if color_map.is_some() { 0x80 } else { 0x00 }; // Yes/no global colormap
+    let mut packed: u8 = if gif.SColorMap.is_some() { 0x80 } else { 0x00 }; // Yes/no global
+                                                                            // colormap
     packed |= (((color_res - 1) & 0x07) << 4) as u8; // Bits allocated to each primary color
-    packed |= if let Some(cm) = color_map {
+    packed |= if let Some(ref cm) = gif.SColorMap {
         (cm.BitsPerPixel - 1) as u8 // Actual size of the color table.
     } else {
         0x07 // Default to largest possible
     };
-    if let Some(cm) = color_map {
+    if let Some(ref cm) = gif.SColorMap {
         if cm.SortFlag {
             packed |= 0x08;
         }
@@ -243,12 +251,13 @@ pub fn egif_put_screen_desc(
     gif.write_exact(&buf)?;
 
     // If we have Global color map - dump it also:
-    if let Some(cm) = color_map {
-        for i in 0..cm.ColorCount as usize {
-            let c = &cm.colors()[i];
-            let rgb = [c.Red, c.Green, c.Blue];
-            gif.write_exact(&rgb)?;
-        }
+    let color_count = gif.SColorMap.as_ref().map_or(0, |cm| cm.ColorCount.max(0) as usize);
+    for i in 0..color_count {
+        let Some(c) = gif.SColorMap.as_ref().and_then(|cm| cm.colors().get(i)) else {
+            break;
+        };
+        let rgb = [c.Red, c.Green, c.Blue];
+        gif.write_exact(&rgb)?;
     }
 
     // Mark this file as has screen descriptor, and no pixel written yet:
@@ -269,7 +278,7 @@ pub fn egif_put_image_desc(
     width: c_int,
     height: c_int,
     interlace: bool,
-    color_map: Option<&ColorMapObject>,
+    color_map: Arg<Option<ColorMapObject>>,
 ) -> Result<(), GifError> {
     // NOTE: The 0xffff0000 threshold is a C-ism: in the 32-bit C code this
     // caught unsigned int wrap-around.  On 64-bit Rust (usize) it's effectively
@@ -290,10 +299,8 @@ pub fn egif_put_image_desc(
     gif.Image.Interlace = interlace;
 
     // Handle color map
-    if let Some(cm) = color_map {
-        gif.Image.ColorMap = Some(Box::new(cm.clone()));
-    } else {
-        gif.Image.ColorMap = None;
+    if let Arg::New(color_map) = color_map {
+        gif.Image.ColorMap = color_map.map(Box::new);
     }
 
     // Put the image descriptor into the file:
@@ -305,24 +312,25 @@ pub fn egif_put_image_desc(
     egif_put_word(gif, height)?;
 
     let mut packed: u8 = 0;
-    if color_map.is_some() {
+    if gif.Image.ColorMap.is_some() {
         packed |= 0x80;
     }
     if interlace {
         packed |= 0x40;
     }
-    if let Some(cm) = color_map {
+    if let Some(ref cm) = gif.Image.ColorMap {
         packed |= (cm.BitsPerPixel - 1) as u8;
     }
     gif.write_exact(&[packed])?;
 
     // If we have local color map - dump it also:
-    if let Some(cm) = color_map {
-        for i in 0..cm.ColorCount as usize {
-            let c = &cm.colors()[i];
-            let rgb = [c.Red, c.Green, c.Blue];
-            gif.write_exact(&rgb)?;
-        }
+    let color_count = gif.Image.ColorMap.as_ref().map_or(0, |cm| cm.ColorCount.max(0) as usize);
+    for i in 0..color_count {
+        let Some(c) = gif.Image.ColorMap.as_ref().and_then(|cm| cm.colors().get(i)) else {
+            break;
+        };
+        let rgb = [c.Red, c.Green, c.Blue];
+        gif.write_exact(&rgb)?;
     }
 
     if gif.SColorMap.is_none() && gif.Image.ColorMap.is_none() {
@@ -622,20 +630,14 @@ fn egif_write_extensions(
 /// Matches EGifSpew in C.
 /// Writes an in-core representation of a GIF to the output.
 pub fn egif_spew(gif: &mut GifFileType) -> Result<(), GifError> {
-    // Take SColorMap out to avoid borrowing gif while passing &mut gif
-    // to egif_put_screen_desc. Restore the original after the call,
-    // replacing the redundant clone that egif_put_screen_desc makes internally.
-    let screen_map = gif.SColorMap.take();
-    let result = egif_put_screen_desc(
+    egif_put_screen_desc(
         gif,
         gif.SWidth as c_int,
         gif.SHeight as c_int,
         gif.SColorResolution as c_int,
         gif.SBackGroundColor as c_int,
-        screen_map.as_deref(),
-    );
-    gif.SColorMap = screen_map;
-    result?;
+        Arg::Current,
+    )?;
 
     let mut line_buf: Vec<u8> = Vec::new();
 
@@ -670,7 +672,7 @@ pub fn egif_spew(gif: &mut GifFileType) -> Result<(), GifError> {
             saved_width,
             saved_height,
             interlace,
-            local_map.as_ref(),
+            Arg::New(local_map),
         )?;
 
         // Pre-size the reusable line buffer for this image.

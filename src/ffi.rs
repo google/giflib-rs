@@ -657,24 +657,35 @@ pub unsafe extern "C" fn GifFreeExtensions(
     unsafe { extension_blocks.as_vec_mut(extension_block_count) }.clear();
 }
 
+/// GifMakeSavedImage — append an image to `gif_file->SavedImages`, copying `copy_from` if
+/// non-null.
+///
+/// # Safety
+///
+/// `copy_from` must be null or point to a valid `SavedImage`, which may be an element of
+/// `gif_file->SavedImages`.
 #[unsafe(no_mangle)]
-pub extern "C" fn GifMakeSavedImage<'a>(
+pub unsafe extern "C" fn GifMakeSavedImage<'a>(
     gif_file: Option<&'a mut GifFileType>,
-    copy_from: Option<&SavedImage>,
+    copy_from: *const SavedImage,
 ) -> Option<&'a mut SavedImage> {
     let gif = gif_file?;
 
-    let sp = if let Some(copy_from) = copy_from {
-        copy_from.clone()
-    } else {
-        SavedImage::new(GifImageDesc {
+    // `copy_from` may point into `gif.SavedImages`, which `try_push_back` reallocates. It is a raw
+    // pointer because a reference parameter would have to stay valid until the function returns.
+    // SAFETY: the caller guarantees that `copy_from` is null or points to a valid `SavedImage`. The
+    // temporary `&SavedImage` is dropped at the end of the `match` after cloning, before
+    // `try_push_back` reallocates `gif.SavedImages`.
+    let sp = match unsafe { copy_from.as_ref() } {
+        Some(copy_from) => copy_from.clone(),
+        None => SavedImage::new(GifImageDesc {
             Left: 0,
             Top: 0,
             Width: 0,
             Height: 0,
             Interlace: false,
             ColorMap: None,
-        })
+        }),
     };
 
     gif.saved_images_vec().try_push_back(sp).ok()?;
@@ -839,36 +850,71 @@ pub extern "C" fn EGifSetGifVersion(gif_file: Option<&mut GifFileType>, gif89: b
     encoder::egif_set_gif_version(gif, gif89);
 }
 
+/// EGifPutScreenDesc — write the GIF header, logical screen descriptor and global color map.
+///
+/// # Safety
+///
+/// `color_map` must be null or point to a valid `ColorMapObject`. It may be one of `gif_file`'s
+/// own maps, e.g. `gif_file->SColorMap` or `gif_file->Image.ColorMap`.
 #[unsafe(no_mangle)]
-pub extern "C" fn EGifPutScreenDesc(
+pub unsafe extern "C" fn EGifPutScreenDesc(
     gif_file: Option<&mut GifFileType>,
     width: c_int,
     height: c_int,
     color_resolution: c_int,
     background: c_int,
-    color_map: Option<&ColorMapObject>,
+    color_map: *const ColorMapObject,
 ) -> c_int {
     let Some(gif) = gif_file else {
         return GIF_ERROR;
+    };
+    // C callers may pass `gif->SColorMap` back in, which `egif_put_screen_desc` would otherwise
+    // replace. `color_map` is a raw pointer because a reference parameter must stay valid until
+    // the function returns.
+    let color_map = if gif.SColorMap.as_deref().is_some_and(|stored| ptr::eq(stored, color_map)) {
+        encoder::Arg::Current
+    } else {
+        // SAFETY: the caller guarantees that `color_map` is null or points to a valid
+        // `ColorMapObject`. It may be owned by `gif` (e.g. `gif->Image.ColorMap`), so the
+        // reference only lives for the copy, before `gif` is used again.
+        encoder::Arg::New(unsafe { color_map.as_ref() }.cloned())
     };
     let r =
         encoder::egif_put_screen_desc(gif, width, height, color_resolution, background, color_map);
     gif.result_to_status(r)
 }
 
+/// EGifPutImageDesc — write an image descriptor and its local color map.
+///
+/// # Safety
+///
+/// `color_map` must be null or point to a valid `ColorMapObject`. It may be one of `gif_file`'s
+/// own maps, e.g. `gif_file->Image.ColorMap` or `gif_file->SColorMap`.
 #[unsafe(no_mangle)]
-pub extern "C" fn EGifPutImageDesc(
+pub unsafe extern "C" fn EGifPutImageDesc(
     gif_file: Option<&mut GifFileType>,
     left: c_int,
     top: c_int,
     width: c_int,
     height: c_int,
     interlace: bool,
-    color_map: Option<&ColorMapObject>,
+    color_map: *const ColorMapObject,
 ) -> c_int {
     let Some(gif) = gif_file else {
         return GIF_ERROR;
     };
+    // As in `EGifPutScreenDesc`: C callers may pass `gif->Image.ColorMap` back in, which
+    // `egif_put_image_desc` would otherwise replace.
+    let color_map =
+        if gif.Image.ColorMap.as_deref().is_some_and(|stored| ptr::eq(stored, color_map)) {
+            encoder::Arg::Current
+        } else {
+            // SAFETY: the caller guarantees that `color_map` is null or points to a valid
+            // `ColorMapObject`. It may be owned by `gif` (e.g. `gif->SColorMap` or a saved
+            // image's map), so the reference only lives for the copy, before `gif` is used
+            // again.
+            encoder::Arg::New(unsafe { color_map.as_ref() }.cloned())
+        };
     let r = encoder::egif_put_image_desc(gif, left, top, width, height, interlace, color_map);
     gif.result_to_status(r)
 }
