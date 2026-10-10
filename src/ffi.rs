@@ -39,7 +39,7 @@ use crate::font;
 use crate::quantize;
 use core::ffi::{c_char, c_int, c_uint, c_void};
 use core::ptr;
-use safer_cffi::{CBufPtr, CStrRef};
+use safer_cffi::{CBufPtr, CStrRef, OwnedCBufPtr};
 
 // ---------------------------------------------------------------------------
 //  Open
@@ -888,8 +888,9 @@ pub unsafe extern "C" fn EGifPutScreenDesc(
 ///
 /// # Safety
 ///
-/// `color_map` must be null or point to a valid `ColorMapObject`. It may be one of `gif_file`'s
-/// own maps, e.g. `gif_file->Image.ColorMap` or `gif_file->SColorMap`.
+/// `color_map` must be null or point to a `ColorMapObject` with valid `ColorCount`, `BitsPerPixel`,
+/// and `Colors`. It may be one of `gif_file`'s own maps, e.g. `gif_file->Image.ColorMap` or
+/// `gif_file->SColorMap`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutImageDesc(
     gif_file: Option<&mut GifFileType>,
@@ -909,11 +910,20 @@ pub unsafe extern "C" fn EGifPutImageDesc(
         if gif.Image.ColorMap.as_deref().is_some_and(|stored| ptr::eq(stored, color_map)) {
             encoder::Arg::Current
         } else {
-            // SAFETY: the caller guarantees that `color_map` is null or points to a valid
-            // `ColorMapObject`. It may be owned by `gif` (e.g. `gif->SColorMap` or a saved
+            // SAFETY: the caller guarantees that `color_map` is null or points to a
+            // `ColorMapObject` with valid `ColorCount`, `BitsPerPixel`, and `Colors` fields.
+            // It may be owned by `gif` (e.g. `gif->SColorMap` or a saved
             // image's map), so the reference only lives for the copy, before `gif` is used
-            // again.
-            encoder::Arg::New(unsafe { color_map.as_ref() }.cloned())
+            // again. Some callers may pass in uninitialized maps for SortFlag (which is never
+            // read in C), so we copy only the initialized fields.
+            // Partially uninit references are not UB as long as uninitialized fields are not
+            // read, cf. https://github.com/rust-lang/unsafe-code-guidelines/issues/414.
+            encoder::Arg::New(unsafe { color_map.as_ref() }.map(|cm| ColorMapObject {
+                ColorCount: cm.ColorCount,
+                BitsPerPixel: cm.BitsPerPixel,
+                SortFlag: false,
+                Colors: OwnedCBufPtr::clone_from_slice(cm.colors()),
+            }))
         };
     let r = encoder::egif_put_image_desc(gif, left, top, width, height, interlace, color_map);
     gif.result_to_status(r)
