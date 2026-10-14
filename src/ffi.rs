@@ -943,15 +943,14 @@ pub unsafe extern "C" fn EGifPutLine(
     let Some(gif) = gif_file else {
         return GIF_ERROR;
     };
-    let len = if line_len <= 0 { 0 } else { line_len as usize };
+    if line.is_null() {
+        return GIF_ERROR;
+    }
+    let line_len = if line_len == 0 { gif.Image.Width } else { line_len };
+    let len = line_len.max(1) as usize;
     // SAFETY: caller guarantees `line` points to at least `len` bytes.
-    // When len is 0, we pass an empty slice; egif_put_line defaults to Image.Width.
-    let line_slice = if len == 0 || line.is_null() {
-        &mut []
-    } else {
-        unsafe { core::slice::from_raw_parts_mut(line, len) }
-    };
-    let r = encoder::egif_put_line(gif, line_slice);
+    let line_slice = unsafe { core::slice::from_raw_parts_mut(line, len) };
+    let r = encoder::egif_put_line(gif, line_slice, line_len);
     gif.result_to_status(r)
 }
 
