@@ -231,7 +231,7 @@ pub fn egif_put_screen_desc(
     // Logical Screen Descriptor: Packed Fields
     let mut packed: u8 = if gif.SColorMap.is_some() { 0x80 } else { 0x00 }; // Yes/no global
                                                                             // colormap
-    packed |= (((color_res - 1) & 0x07) << 4) as u8; // Bits allocated to each primary color
+    packed |= ((color_res.wrapping_sub(1) & 0x07) << 4) as u8; // Bits allocated to each primary color
     packed |= if let Some(ref cm) = gif.SColorMap {
         (cm.BitsPerPixel - 1) as u8 // Actual size of the color table.
     } else {
