@@ -1303,8 +1303,9 @@ pub unsafe extern "C" fn GifQuantizeBuffer(
     let green = unsafe { core::slice::from_raw_parts(green_input, num_pixels) };
     let blue = unsafe { core::slice::from_raw_parts(blue_input, num_pixels) };
     let out_buf = unsafe { core::slice::from_raw_parts_mut(output_buffer, num_pixels) };
-    // SAFETY: caller guarantees output_color_map has at least cms entries.
-    let out_cmap = unsafe { core::slice::from_raw_parts_mut(output_color_map, *cms as usize) };
+    // SAFETY: caller guarantees output_color_map has at least max(cms, 1) entries.
+    let map_len = (*cms as usize).max(1);
+    let out_cmap = unsafe { core::slice::from_raw_parts_mut(output_color_map, map_len) };
 
     if quantize::gif_quantize_buffer(width, height, cms, red, green, blue, out_buf, out_cmap) {
         GIF_OK
