@@ -46,6 +46,9 @@ use safer_cffi::{CBufPtr, CStrRef, OwnedCBufPtr};
 // ---------------------------------------------------------------------------
 
 /// DGifOpenFileName — open a GIF file by filename.
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifOpenFileName` (or `rs_DGifOpenFileName`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifOpenFileName(
     file_name: Option<CStrRef<'_>>,
@@ -75,15 +78,25 @@ pub extern "C" fn DGifOpenFileName(
 ///
 /// # Safety
 ///
-/// * file_handle must be a valid, opened file descriptor and ownership must be passed as part of
-///   this method call.
+/// The caller must ensure that:
+/// - If `file_handle >= 0`, `file_handle` is a valid, open OS file descriptor, and exclusive
+///   ownership of `file_handle` is transferred to this function (the caller must not close or
+///   use `file_handle` after this call).
+/// - Postcondition: If `file_handle >= 0`, ownership is wrapped in the returned `std::fs::File`
+///   (or closed immediately if the platform cannot wrap it), whereas if `file_handle < 0`,
+///   `None` is returned without touching any OS descriptor.
 unsafe fn make_file(file_handle: c_int) -> Option<std::fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::io::FromRawFd;
         if file_handle >= 0 {
-            // SAFETY: Per function contract, file_handle is a valid file descriptor.
-            // Caller transfers ownership of the file descriptor.
+            // SAFETY:
+            // - Operation: `std::fs::File::from_raw_fd(file_handle)`.
+            // - Contract: `file_handle` must be an open, valid file descriptor whose exclusive
+            //   ownership transfers to the new `File`.
+            // - Evidence: `file_handle >= 0` is checked above, and by this function's `# Safety`
+            //   precondition, a non-negative `file_handle` is a valid open descriptor whose
+            //   exclusive ownership is transferred by the caller.
             Some(unsafe { std::fs::File::from_raw_fd(file_handle) })
         } else {
             None
@@ -96,12 +109,22 @@ unsafe fn make_file(file_handle: c_int) -> Option<std::fs::File> {
         // abort the process. The C library fails gracefully via fdopen(); we
         // replicate that by checking here.
         if file_handle >= 0 {
-            // SAFETY: Per function contract, file_handle is a valid file descriptor.
+            // SAFETY:
+            // - Operation: `libc::get_osfhandle(file_handle)`.
+            // - Contract: `file_handle` must be a valid C runtime file descriptor.
+            // - Evidence: `file_handle >= 0` is checked above, and by this function's `# Safety`
+            //   precondition, a non-negative `file_handle` is a valid open CRT descriptor.
             let handle = unsafe { libc::get_osfhandle(file_handle) };
             if handle == -1 {
                 None
             } else {
-                // SAFETY: fd is non-negative; caller transfers ownership.
+                // SAFETY:
+                // - Operation: `std::fs::File::from_raw_handle(handle as *mut c_void)`.
+                // - Contract: `handle` must be a valid open Windows OS handle whose exclusive
+                //   ownership transfers to the new `File`.
+                // - Evidence: `get_osfhandle` succeeded (`handle != -1`), and by this function's
+                //   `# Safety` precondition, exclusive ownership of the underlying descriptor/handle
+                //   is transferred by the caller.
                 Some(unsafe { std::fs::File::from_raw_handle(handle as *mut c_void) })
             }
         } else {
@@ -112,10 +135,15 @@ unsafe fn make_file(file_handle: c_int) -> Option<std::fs::File> {
     {
         // We cannot use file_handle on this platform to create a File,
         // so we close it to prevent leaking resources.
-        // SAFETY: Per function contract, file_handle is a valid file descriptor
-        // that this function takes ownership of, so it is safe to close.
-        unsafe {
-            let _ = libc::close(file_handle);
+        if file_handle >= 0 {
+            // SAFETY:
+            // - Operation: `libc::close(file_handle)`.
+            // - Contract: `file_handle` must be a valid open file descriptor owned by the caller.
+            // - Evidence: `file_handle >= 0` is checked above, and by this function's `# Safety`
+            //   precondition, exclusive ownership of `file_handle` was transferred to this call.
+            unsafe {
+                let _ = libc::close(file_handle);
+            }
         }
         None
     }
@@ -125,17 +153,26 @@ unsafe fn make_file(file_handle: c_int) -> Option<std::fs::File> {
 ///
 /// # Safety
 ///
-/// This function **takes ownership** of `file_handle` via `File::from_raw_fd`.
-/// The file descriptor will be closed when the `GifFileType` is closed via
-/// `DGifCloseFile`. The caller MUST NOT close the fd separately.
-/// This matches the C original's use of `fdopen()`, which similarly takes
-/// ownership of the descriptor.
+/// The caller must ensure that:
+/// - If `file_handle >= 0`, `file_handle` is a valid, open OS file descriptor, and exclusive
+///   ownership of `file_handle` is transferred to `DGifOpenFileHandle` (the caller must not close
+///   or access `file_handle` directly after this call).
+/// - Postcondition: If `file_handle >= 0`, the descriptor is closed either when the returned
+///   `GifFileType` is closed via `DGifCloseFile` (on success) or immediately before this function
+///   returns `None` (if reading the GIF header fails).
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifOpenFileHandle` (or
+// `rs_DGifOpenFileHandle` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn DGifOpenFileHandle(
     file_handle: c_int,
     error: Option<&mut c_int>,
 ) -> Option<Box<GifFileType>> {
-    // SAFETY: Per function contract, `file_handle` is a valid file descriptor.
+    // SAFETY:
+    // - Operation: `make_file(file_handle)`.
+    // - Contract: If `file_handle >= 0`, it must be a valid open OS file descriptor whose
+    //   exclusive ownership transfers to `make_file`.
+    // - Evidence: Guaranteed directly by this function's `# Safety` precondition.
     let file = unsafe { make_file(file_handle) };
 
     let gif = decoder::dgif_open(file, None, ptr::null_mut());
@@ -154,11 +191,19 @@ pub unsafe extern "C" fn DGifOpenFileHandle(
 ///
 /// # Safety
 ///
-/// Caller must guarantee that `read_func` points to a valid function that
-/// implements the ReadCallback contract. If `user_data` is non-null, it must
-/// be valid for the lifetime of the returned `GifFileType` struct (i.e., until
-/// `DGifCloseFile` is called), as it may be accessed by `read_func` via
-/// `gif->UserData`.
+/// The caller must ensure that:
+/// - If `read_func` is `Some(func)`, `func` is a valid C ABI function pointer that remains valid
+///   to invoke for the duration of this call and, if this call succeeds, until the returned
+///   `GifFileType` is closed via `DGifCloseFile`.
+/// - Whenever `func(gif, buf, len)` is invoked with a valid `GifFileType*`, `len >= 0`, and a
+///   non-null pointer `buf` valid for writes of `len as usize` bytes within a single live
+///   allocation, `func` writes at most `len as usize` bytes to `buf`, does not read uninitialized
+///   bytes from `buf`, does not unwind across the FFI boundary, and does not invalidate `*gif`.
+/// - `user_data` satisfies any validity and lifetime invariants required by `read_func` (via
+///   `gif->UserData`) for the duration of this call and until `DGifCloseFile` is called.
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifOpen` (or `rs_DGifOpen` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn DGifOpen(
     user_data: *mut c_void,
@@ -172,7 +217,13 @@ pub unsafe extern "C" fn DGifOpen(
         return None;
     }
     let callback = read_func.map(|f| {
-        // SAFETY: The caller guarantees that `f` upholds the ReadCallback contract.
+        // SAFETY:
+        // - Operation: `ReadCallback::new(f)`.
+        // - Contract: `f` must be a valid C ABI function pointer for the lifetime of the
+        //   `GifFileType` handle that writes at most `len` bytes into the provided buffer without
+        //   unwinding or invalidating `*gif`.
+        // - Evidence: Guaranteed by this function's `# Safety` precondition on `read_func` and
+        //   `user_data`.
         unsafe { ReadCallback::new(f) }
     });
     let gif = decoder::dgif_open(None, callback, user_data);
@@ -191,6 +242,9 @@ pub unsafe extern "C" fn DGifOpen(
 //  Close
 // ---------------------------------------------------------------------------
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifCloseFile` (or `rs_DGifCloseFile` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifCloseFile(
     gif_file: Option<Box<GifFileType>>,
@@ -211,6 +265,9 @@ pub extern "C" fn DGifCloseFile(
 //  Decoder API
 // ---------------------------------------------------------------------------
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetScreenDesc` (or
+// `rs_DGifGetScreenDesc` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetScreenDesc(gif_file: Option<&mut GifFileType>) -> c_int {
     let Some(gif) = gif_file else {
@@ -220,6 +277,9 @@ pub extern "C" fn DGifGetScreenDesc(gif_file: Option<&mut GifFileType>) -> c_int
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetRecordType` (or
+// `rs_DGifGetRecordType` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetRecordType(
     gif_file: Option<&mut GifFileType>,
@@ -246,6 +306,9 @@ pub extern "C" fn DGifGetRecordType(
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetImageHeader` (or
+// `rs_DGifGetImageHeader` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetImageHeader(gif_file: Option<&mut GifFileType>) -> c_int {
     let Some(gif) = gif_file else {
@@ -255,6 +318,9 @@ pub extern "C" fn DGifGetImageHeader(gif_file: Option<&mut GifFileType>) -> c_in
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetImageDesc` (or `rs_DGifGetImageDesc`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetImageDesc(gif_file: Option<&mut GifFileType>) -> c_int {
     let Some(gif) = gif_file else {
@@ -268,8 +334,16 @@ pub extern "C" fn DGifGetImageDesc(gif_file: Option<&mut GifFileType>) -> c_int 
 ///
 /// # Safety
 ///
-/// Caller must guarantee that `line` points to a buffer of at least `line_len` bytes that is
-/// valid for writes for the duration of the function call.
+/// The caller must ensure that:
+/// - If `gif_file` is `Some(gif)`, `line` is non-null, and `line_len >= 0`, let
+///   `len = if line_len == 0 { gif.Image.Width.max(0) as usize } else { line_len as usize }`;
+///   then `line` points to a buffer of at least `len` consecutive `GifPixelType` elements within
+///   a single live allocation (with `len <= isize::MAX as usize`) that is valid for writes.
+/// - For the duration of this call, the buffer pointed to by `line` does not alias `gif` (or any
+///   memory reachable from `gif`) and is not accessed through any other pointer or thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetLine` (or `rs_DGifGetLine` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn DGifGetLine(
     gif_file: Option<&mut GifFileType>,
@@ -283,12 +357,24 @@ pub unsafe extern "C" fn DGifGetLine(
         return GIF_ERROR;
     };
     let len = if line_len == 0 { gif.Image.Width.max(0) as usize } else { line_len as usize };
-    // SAFETY: caller guarantees safety invariants on `line` and `line_len`.
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts_mut(line, len)`.
+    // - Contract: `line` must be non-null, aligned for `GifPixelType` (`u8`, alignment 1), point
+    //   to `len` consecutive elements within a single live allocation (`len <= isize::MAX as usize`)
+    //   valid for reads and writes, and be unaliased for the duration of the slice's lifetime.
+    // - Evidence: `!line.is_null()` and `line_len >= 0` are checked above; `len` is bounded by
+    //   `c_int::MAX as usize <= isize::MAX as usize`; `u8` has alignment 1 and `dgif_get_line`
+    //   only writes into `line_slice` without reading uninitialized bytes (cf. UCG#414); and by
+    //   this function's `# Safety` precondition, `line` points to at least `len` writable bytes in
+    //   a single live allocation disjoint from `gif` for the duration of this call.
     let line_slice = unsafe { core::slice::from_raw_parts_mut(line, len) };
     let r = decoder::dgif_get_line(gif, line_slice);
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetPixel` (or `rs_DGifGetPixel` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetPixel(gif_file: Option<&mut GifFileType>, pixel: GifPixelType) -> c_int {
     // NOTE: The C API is a no-op by design (pass-by-value pixel).
@@ -302,6 +388,9 @@ pub extern "C" fn DGifGetPixel(gif_file: Option<&mut GifFileType>, pixel: GifPix
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetExtension` (or `rs_DGifGetExtension`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetExtension(
     gif_file: Option<&mut GifFileType>,
@@ -332,6 +421,9 @@ pub extern "C" fn DGifGetExtension(
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetExtensionNext` (or
+// `rs_DGifGetExtensionNext` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetExtensionNext(
     gif_file: Option<&mut GifFileType>,
@@ -359,6 +451,9 @@ pub extern "C" fn DGifGetExtensionNext(
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetCode` (or `rs_DGifGetCode` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetCode(
     gif_file: Option<&mut GifFileType>,
@@ -388,6 +483,9 @@ pub extern "C" fn DGifGetCode(
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetCodeNext` (or `rs_DGifGetCodeNext` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetCodeNext(
     gif_file: Option<&mut GifFileType>,
@@ -415,6 +513,9 @@ pub extern "C" fn DGifGetCodeNext(
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetLZCodes` (or `rs_DGifGetLZCodes` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetLZCodes(
     gif_file: Option<&mut GifFileType>,
@@ -430,6 +531,9 @@ pub extern "C" fn DGifGetLZCodes(
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifSlurp` (or `rs_DGifSlurp` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifSlurp(gif_file: Option<&mut GifFileType>) -> c_int {
     let Some(gif) = gif_file else {
@@ -439,6 +543,9 @@ pub extern "C" fn DGifSlurp(gif_file: Option<&mut GifFileType>) -> c_int {
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifGetGifVersion` (or
+// `rs_DGifGetGifVersion` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifGetGifVersion(gif_file: Option<&mut GifFileType>) -> *const c_char {
     let Some(gif) = gif_file else {
@@ -455,9 +562,15 @@ pub extern "C" fn DGifGetGifVersion(gif_file: Option<&mut GifFileType>) -> *cons
 ///
 /// # Safety
 ///
-/// Caller must guarantee that `gif_extension` points to a buffer of at least
-/// `gif_extension_length` bytes that is valid for reads for the duration of the
-/// function call.
+/// The caller must ensure that:
+/// - If `gcb` is `Some`, `gif_extension` is non-null, and `gif_extension_length == 4`, then
+///   `gif_extension` points to 4 consecutive initialized `GifByteType` bytes within a single live
+///   allocation that is valid for reads.
+/// - For the duration of this call, the 4 bytes at `gif_extension` do not alias `gcb` and are not
+///   mutated by any other pointer or thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifExtensionToGCB` (or
+// `rs_DGifExtensionToGCB` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn DGifExtensionToGCB(
     gif_extension_length: usize,
@@ -467,17 +580,28 @@ pub unsafe extern "C" fn DGifExtensionToGCB(
     let Some(gcb) = gcb else {
         return GIF_ERROR;
     };
-    if gif_extension.is_null() {
+    if gif_extension.is_null() || gif_extension_length != 4 {
         return GIF_ERROR;
     }
-    // SAFETY: caller guarantees gif_extension points to gif_extension_length bytes.
-    let ext = unsafe { core::slice::from_raw_parts(gif_extension, gif_extension_length) };
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts(gif_extension, 4)`.
+    // - Contract: `gif_extension` must be non-null, 1-byte aligned, point to 4 consecutive
+    //   initialized `GifByteType` elements within a single live allocation (`4 <= isize::MAX`),
+    //   and not be mutated for the duration of the slice borrow.
+    // - Evidence: `!gif_extension.is_null()` and `gif_extension_length == 4` are checked above,
+    //   `align_of::<GifByteType>() == 1`, and by this function's `# Safety` precondition,
+    //   `gif_extension` points to 4 initialized bytes in a single live allocation disjoint from
+    //   `gcb` and unmutated for the duration of this call.
+    let ext = unsafe { core::slice::from_raw_parts(gif_extension, 4) };
     match decoder::dgif_extension_to_gcb(ext, gcb) {
         Ok(()) => GIF_OK,
         Err(_) => GIF_ERROR,
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `DGifSavedExtensionToGCB` (or
+// `rs_DGifSavedExtensionToGCB` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn DGifSavedExtensionToGCB(
     gif_file: Option<&mut GifFileType>,
@@ -507,10 +631,15 @@ pub extern "C" fn DGifSavedExtensionToGCB(
 ///
 /// # Safety
 ///
-/// If `color_map` is non-null, it must reside within a single allocated object, point to at least
-/// `color_count` initialized, valid `GifColorType` elements, and not be mutated by any other
-/// pointer or thread for the duration of the function call. Alignment is guaranteed implicitly
-/// by the fact that `GifColorType` is 1-byte aligned.
+/// The caller must ensure that:
+/// - If `color_map` is non-null and `color_count` is a power of 2 in `2..=512`, `color_map`
+///   points to at least `color_count as usize` consecutive initialized `GifColorType` elements
+///   within a single live allocation (`color_count as usize * size_of::<GifColorType>() <= isize::MAX as usize`).
+/// - For the duration of this call, the memory referenced by `color_map` is not mutated by any
+///   other pointer or thread. Alignment is satisfied because `align_of::<GifColorType>() == 1`.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifMakeMapObject` (or `rs_GifMakeMapObject`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifMakeMapObject(
     color_count: c_int,
@@ -520,17 +649,25 @@ pub unsafe extern "C" fn GifMakeMapObject(
     if !color_map.is_null() {
         let colors = object.colors_mut();
         // SAFETY:
-        // - `color_map` is checked non-null above.
-        // - By function `# Safety` contract, `color_map` is aligned (align_of::<GifColorType>() ==
-        //   1), points to at least `color_count` initialized `GifColorType` elements in a single
-        //   allocation, and is not concurrently mutated during the call.
-        // - `colors.len()` equals `color_count` as allocated by `ColorMapObject::new(color_count)`.
-        // - `colors` is a freshly allocated buffer disjoint from `color_map`, so they do not alias.
+        // - Operation: `core::slice::from_raw_parts(color_map, colors.len())`.
+        // - Contract: `color_map` must be non-null, 1-byte aligned (`align_of::<GifColorType>() == 1`),
+        //   point to `colors.len()` consecutive initialized `GifColorType` elements within a
+        //   single live allocation (`colors.len() * 3 <= 1536 <= isize::MAX as usize`), and not be
+        //   mutated during the call.
+        // - Evidence: `!color_map.is_null()` is checked above; `colors.len()` equals
+        //   `color_count as usize` (`2..=512`) as allocated by `ColorMapObject::new(color_count)`;
+        //   and by this function's `# Safety` precondition, `color_map` points to at least
+        //   `color_count as usize` initialized `GifColorType` elements in a single live allocation
+        //   that is disjoint from the freshly allocated `colors` buffer and unmutated during this
+        //   call.
         colors.copy_from_slice(unsafe { core::slice::from_raw_parts(color_map, colors.len()) });
     }
     Some(Box::new(object))
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `GifFreeMapObject` (or `rs_GifFreeMapObject`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifFreeMapObject(object: Option<Box<ColorMapObject>>) {
     drop(object);
@@ -540,9 +677,17 @@ pub extern "C" fn GifFreeMapObject(object: Option<Box<ColorMapObject>>) {
 ///
 /// # Safety
 ///
-/// Caller must guarantee that `color_trans_in2` points to a valid array of
-/// `GifPixelType` of at least `color_in2->ColorCount` elements for the duration
-/// of the function call.
+/// The caller must ensure that:
+/// - If `color_in1` and `color_in2` are `Some` and `color_trans_in2` is non-null,
+///   `color_trans_in2` points to a buffer valid for writes of at least
+///   `color_in2.colors().len()` consecutive `GifPixelType` elements within a single live
+///   allocation (`<= isize::MAX` bytes).
+/// - For the duration of this call, the buffer at `color_trans_in2` does not alias `color_in1` or
+///   `color_in2` (or their `Colors` arrays) and is not accessed through any other pointer or
+///   thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifUnionColorMap` (or `rs_GifUnionColorMap`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifUnionColorMap(
     color_in1: Option<&ColorMapObject>,
@@ -557,22 +702,33 @@ pub unsafe extern "C" fn GifUnionColorMap(
     let trans_len = color_in2.colors().len();
 
     // SAFETY:
-    // - `color_trans_in2` is non-null (checked above) and aligned (`align_of::<GifPixelType>() ==
-    //   1`).
-    // - By C API contract, `color_trans_in2` points to at least `trans_len` elements in a single
-    //   allocation valid for writes.
-    // - The caller guarantees exclusive access to `color_trans_in2` (does not alias `color_in1` or
-    //   `color_in2`).
+    // - Operation: `core::slice::from_raw_parts_mut(color_trans_in2, trans_len)`.
+    // - Contract: `color_trans_in2` must be non-null, 1-byte aligned
+    //   (`align_of::<GifPixelType>() == 1`), point to `trans_len` consecutive `GifPixelType`
+    //   elements within a single live allocation (`trans_len <= isize::MAX as usize`) valid for
+    //   reads and writes, and be unaliased for the duration of the slice's lifetime.
+    // - Evidence: `!color_trans_in2.is_null()` is checked above; by `ColorMapObject::Colors`'s
+    //   field safety invariant, `trans_len <= isize::MAX as usize`; `union_with` only writes into
+    //   `trans` without reading uninitialized bytes (cf. UCG#414); and by this function's
+    //   `# Safety` precondition, `color_trans_in2` points to at least `trans_len` writable bytes
+    //   in a single live allocation disjoint from `color_in1` and `color_in2` for the duration of
+    //   this call.
     let trans = unsafe { core::slice::from_raw_parts_mut(color_trans_in2, trans_len) };
 
     color_in1.union_with(color_in2, trans).map(Box::new)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `GifBitSize` (or `rs_GifBitSize` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifBitSize(n: c_int) -> c_int {
     ColorMapObject::bit_size(n)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `GifApplyTranslation` (or
+// `rs_GifApplyTranslation` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifApplyTranslation(
     image: Option<&mut SavedImage>,
@@ -591,10 +747,20 @@ pub extern "C" fn GifApplyTranslation(
 ///
 /// # Safety
 ///
-/// If `ext_data` is non-null, it must point to a buffer of at least
-/// `len` bytes that is valid for reads for the duration of the function call.
-/// `*extension_blocks` must be null or a malloc-allocated array of `*extension_block_count`
-/// initialized `ExtensionBlock`s.
+/// The caller must ensure that:
+/// - If `extension_block_count` is `Some(count)` and `extension_blocks` is `Some(blocks)`:
+///   - `*count >= 0`.
+///   - Either `*blocks` is null with `*count == 0`, or `*blocks` points to a `LibcAlloc`-allocated
+///     array of `*count` consecutive initialized `ExtensionBlock` elements (each satisfying
+///     `ExtensionBlock`'s field safety invariant) within a single live allocation with length-only
+///     capacity (`capacity == *count`).
+/// - If `ext_data` is non-null and `len > 0` (`len <= c_int::MAX as c_uint`), `ext_data` points
+///   to at least `len as usize` consecutive initialized `u8` bytes valid for reads within a single
+///   live allocation (`len as usize <= isize::MAX as usize`), and is not mutated or aliased by
+///   `extension_block_count` or `extension_blocks` for the duration of this call.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifAddExtensionBlock` (or
+// `rs_GifAddExtensionBlock` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifAddExtensionBlock(
     extension_block_count: Option<&mut c_int>,
@@ -623,13 +789,29 @@ pub unsafe extern "C" fn GifAddExtensionBlock(
             &[]
         }
     } else {
-        // SAFETY: caller guarantees ext_data points to at least `len` bytes.
+        // SAFETY:
+        // - Operation: `core::slice::from_raw_parts(ext_data, len as usize)`.
+        // - Contract: `ext_data` must be non-null, 1-byte aligned, point to `len as usize`
+        //   consecutive initialized `u8` bytes within a single live allocation
+        //   (`len as usize <= isize::MAX as usize`), and not be mutated for the lifetime of `data`.
+        // - Evidence: `!ext_data.is_null()`, `len > 0`, and `c_int::try_from(len).is_ok()` (so
+        //   `len as usize <= c_int::MAX as usize <= isize::MAX as usize`) are checked above; and by
+        //   this function's `# Safety` precondition, `ext_data` points to `len as usize`
+        //   initialized bytes in a single live allocation that is not mutated before
+        //   `ExtensionBlock::try_new` copies `data`.
         unsafe { core::slice::from_raw_parts(ext_data, len as usize) }
     };
     let Ok(block) = ExtensionBlock::try_new(function, data) else {
         return GIF_ERROR;
     };
-    // SAFETY: the length of `*extension_blocks` is `*extension_block_count`.
+    // SAFETY:
+    // - Operation: `extension_blocks.as_vec_mut(extension_block_count)`.
+    // - Contract: `*extension_block_count >= 0`, and either `*extension_blocks` is null with
+    //   `*extension_block_count == 0`, or `*extension_blocks` points to a `LibcAlloc`-allocated
+    //   array of `*extension_block_count` initialized `ExtensionBlock` elements with length-only
+    //   capacity.
+    // - Evidence: Guaranteed by this function's `# Safety` precondition on `extension_blocks` and
+    //   `extension_block_count`.
     match unsafe { extension_blocks.as_vec_mut(extension_block_count) }.try_push_back(block) {
         Ok(()) => GIF_OK,
         Err(_) => GIF_ERROR,
@@ -640,8 +822,17 @@ pub unsafe extern "C" fn GifAddExtensionBlock(
 ///
 /// # Safety
 ///
-/// `*extension_blocks` must be null or a malloc-allocated array of `*extension_block_count`
-/// initialized `ExtensionBlock`s.
+/// The caller must ensure that:
+/// - If `extension_block_count` is `Some(count)` and `extension_blocks` is `Some(blocks)`:
+///   - `*count >= 0`.
+///   - Either `*blocks` is null with `*count == 0`, or `*blocks` points to a `LibcAlloc`-allocated
+///     array of `*count` consecutive initialized `ExtensionBlock` elements (each satisfying
+///     `ExtensionBlock`'s field safety invariant) within a single live allocation with length-only
+///     capacity (`capacity == *count`), and exclusive ownership of those elements is available to
+///     be dropped and deallocated by this call.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifFreeExtensions` (or
+// `rs_GifFreeExtensions` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifFreeExtensions(
     extension_block_count: Option<&mut c_int>,
@@ -653,7 +844,14 @@ pub unsafe extern "C" fn GifFreeExtensions(
     let Some(extension_blocks) = extension_blocks else {
         return;
     };
-    // SAFETY: the length of `*extension_blocks` is `*extension_block_count`.
+    // SAFETY:
+    // - Operation: `extension_blocks.as_vec_mut(extension_block_count)`.
+    // - Contract: `*extension_block_count >= 0`, and either `*extension_blocks` is null with
+    //   `*extension_block_count == 0`, or `*extension_blocks` points to a `LibcAlloc`-allocated
+    //   array of `*extension_block_count` initialized `ExtensionBlock` elements with length-only
+    //   capacity.
+    // - Evidence: Guaranteed by this function's `# Safety` precondition on `extension_blocks` and
+    //   `extension_block_count`.
     unsafe { extension_blocks.as_vec_mut(extension_block_count) }.clear();
 }
 
@@ -662,8 +860,14 @@ pub unsafe extern "C" fn GifFreeExtensions(
 ///
 /// # Safety
 ///
-/// `copy_from` must be null or point to a valid `SavedImage`, which may be an element of
-/// `gif_file->SavedImages`.
+/// The caller must ensure that:
+/// - `copy_from` is either null or properly aligned and points to an initialized `SavedImage`
+///   within a live allocation whose fields satisfy `SavedImage`'s field safety invariants.
+/// - `copy_from` may point to an element inside `gif_file->SavedImages`; no mutable reference
+///   other than `gif_file` may alias `*copy_from` for the duration of this call.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifMakeSavedImage` (or
+// `rs_GifMakeSavedImage` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifMakeSavedImage<'a>(
     gif_file: Option<&'a mut GifFileType>,
@@ -673,9 +877,16 @@ pub unsafe extern "C" fn GifMakeSavedImage<'a>(
 
     // `copy_from` may point into `gif.SavedImages`, which `try_push_back` reallocates. It is a raw
     // pointer because a reference parameter would have to stay valid until the function returns.
-    // SAFETY: the caller guarantees that `copy_from` is null or points to a valid `SavedImage`. The
-    // temporary `&SavedImage` is dropped at the end of the `match` after cloning, before
-    // `try_push_back` reallocates `gif.SavedImages`.
+    // SAFETY:
+    // - Operation: `copy_from.as_ref()`.
+    // - Contract: If `copy_from` is non-null, it must be properly aligned for `SavedImage`, point
+    //   to an initialized valid `SavedImage` in a live allocation, and not be mutably aliased
+    //   during the lifetime of the temporary `&SavedImage`.
+    // - Evidence: By this function's `# Safety` precondition, `copy_from` is null or aligned and
+    //   points to a valid `SavedImage`. Even if `copy_from` points into the heap buffer behind
+    //   `gif.SavedImages` (a raw `CBufPtr`), `gif` is not accessed while the temporary
+    //   `&SavedImage` is cloned, and the temporary reference is dropped at the end of the `match`
+    //   before `gif.saved_images_vec().try_push_back(sp)` mutates or reallocates `gif.SavedImages`.
     let sp = match unsafe { copy_from.as_ref() } {
         Some(copy_from) => copy_from.clone(),
         None => SavedImage::new(GifImageDesc {
@@ -694,6 +905,9 @@ pub unsafe extern "C" fn GifMakeSavedImage<'a>(
     gif.saved_images_mut().last_mut()
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `GifFreeSavedImages` (or
+// `rs_GifFreeSavedImages` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifFreeSavedImages(gif_file: Option<&mut GifFileType>) {
     if let Some(gif) = gif_file {
@@ -701,6 +915,9 @@ pub extern "C" fn GifFreeSavedImages(gif_file: Option<&mut GifFileType>) {
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `openbsd_reallocarray` (or
+// `rs_openbsd_reallocarray` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn openbsd_reallocarray(
     _optr: *mut c_void,
@@ -714,6 +931,9 @@ pub extern "C" fn openbsd_reallocarray(
 //  Error API
 // ---------------------------------------------------------------------------
 
+// SAFETY: Exports the canonical giflib C ABI symbol `GifErrorString` (or `rs_GifErrorString` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifErrorString(error_code: c_int) -> *const c_char {
     match err::GifError::from_error_code(error_code) {
@@ -726,6 +946,9 @@ pub extern "C" fn GifErrorString(error_code: c_int) -> *const c_char {
 //  Encoder API
 // ---------------------------------------------------------------------------
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifOpenFileName` (or `rs_EGifOpenFileName`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifOpenFileName(
     file_name: Option<CStrRef<'_>>,
@@ -755,15 +978,26 @@ pub extern "C" fn EGifOpenFileName(
 ///
 /// # Safety
 ///
-/// This function **takes ownership** of `file_handle` via `File::from_raw_fd`.
-/// The file descriptor will be closed when the `GifFileType` is closed via
-/// `EGifCloseFile`. The caller MUST NOT close the fd separately.
+/// The caller must ensure that:
+/// - If `file_handle >= 0`, `file_handle` is a valid, open OS file descriptor, and exclusive
+///   ownership of `file_handle` is transferred to `EGifOpenFileHandle` (the caller must not close
+///   or access `file_handle` directly after this call).
+/// - Postcondition: If `file_handle >= 0`, the descriptor is closed either when the returned
+///   `GifFileType` is closed via `EGifCloseFile` / `EGifSpew` (on success) or immediately before
+///   this function returns `None` (if opening fails).
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifOpenFileHandle` (or
+// `rs_EGifOpenFileHandle` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifOpenFileHandle(
     file_handle: c_int,
     error: Option<&mut c_int>,
 ) -> Option<Box<GifFileType>> {
-    // SAFETY: Per function contract, `file_handle` is a valid file descriptor.
+    // SAFETY:
+    // - Operation: `make_file(file_handle)`.
+    // - Contract: If `file_handle >= 0`, it must be a valid open OS file descriptor whose
+    //   exclusive ownership transfers to `make_file`.
+    // - Evidence: Guaranteed directly by this function's `# Safety` precondition.
     let file = unsafe { make_file(file_handle) };
 
     let gif = encoder::egif_open(file, None, ptr::null_mut());
@@ -782,12 +1016,21 @@ pub unsafe extern "C" fn EGifOpenFileHandle(
 ///
 /// # Safety
 ///
-/// Caller must guarantee that `write_func` points to a valid function that
-/// upholds the WriteCallback contract for the duration of the function call and
-/// until the GIF is closed via `EGifCloseFile`. If `user_data` is non-null, it
-/// must be valid for the lifetime of the returned `GifFileType` struct (i.e.,
-/// until `EGifCloseFile` is called), as it may be accessed by `write_func` via
-/// `gif->UserData`.
+/// The caller must ensure that:
+/// - If `write_func` is `Some(func)`, `func` is a valid C ABI function pointer that remains valid
+///   to invoke for the duration of this call and, if this call succeeds, until the returned
+///   `GifFileType` is closed via `EGifCloseFile` or `EGifSpew`.
+/// - Whenever `func(gif, buf, len)` is invoked with a valid `GifFileType*`, `len >= 0`, and a
+///   non-null pointer `buf` valid for reads of `len as usize` initialized bytes within a single
+///   live allocation, `func` reads at most `len as usize` bytes from `buf`, does not mutate
+///   memory through `buf`, does not unwind across the FFI boundary, and does not invalidate
+///   `*gif`.
+/// - `user_data` satisfies any validity and lifetime invariants required by `write_func` (via
+///   `gif->UserData`) for the duration of this call and until `EGifCloseFile` / `EGifSpew` is
+///   called.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifOpen` (or `rs_EGifOpen` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifOpen(
     user_data: *mut c_void,
@@ -795,7 +1038,13 @@ pub unsafe extern "C" fn EGifOpen(
     error: Option<&mut c_int>,
 ) -> Option<Box<GifFileType>> {
     let callback = write_func.map(|f| {
-        // SAFETY: The caller guarantees that `f` upholds the WriteCallback contract.
+        // SAFETY:
+        // - Operation: `WriteCallback::new(f)`.
+        // - Contract: `f` must be a valid C ABI function pointer for the lifetime of the
+        //   `GifFileType` handle that reads at most `len` bytes from the provided buffer without
+        //   unwinding or invalidating `*gif`.
+        // - Evidence: Guaranteed by this function's `# Safety` precondition on `write_func` and
+        //   `user_data`.
         unsafe { WriteCallback::new(f) }
     });
     let gif = encoder::egif_open(None, callback, user_data);
@@ -810,6 +1059,9 @@ pub unsafe extern "C" fn EGifOpen(
     }
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifCloseFile` (or `rs_EGifCloseFile` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifCloseFile(
     gif_file: Option<Box<GifFileType>>,
@@ -834,6 +1086,9 @@ pub extern "C" fn EGifCloseFile(
     GIF_OK
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifGetGifVersion` (or
+// `rs_EGifGetGifVersion` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifGetGifVersion(gif_file: Option<&mut GifFileType>) -> *const c_char {
     let Some(gif) = gif_file else {
@@ -842,6 +1097,9 @@ pub extern "C" fn EGifGetGifVersion(gif_file: Option<&mut GifFileType>) -> *cons
     encoder::egif_get_gif_version(gif).as_ptr() as *const c_char
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifSetGifVersion` (or
+// `rs_EGifSetGifVersion` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifSetGifVersion(gif_file: Option<&mut GifFileType>, gif89: bool) {
     let Some(gif) = gif_file else {
@@ -854,8 +1112,15 @@ pub extern "C" fn EGifSetGifVersion(gif_file: Option<&mut GifFileType>, gif89: b
 ///
 /// # Safety
 ///
-/// `color_map` must be null or point to a valid `ColorMapObject`. It may be one of `gif_file`'s
-/// own maps, e.g. `gif_file->SColorMap` or `gif_file->Image.ColorMap`.
+/// The caller must ensure that:
+/// - `color_map` is either null or properly aligned and points to an initialized `ColorMapObject`
+///   within a live allocation whose fields satisfy `ColorMapObject`'s field safety invariants.
+/// - `color_map` may point to one of `gif_file`'s own maps (e.g. `gif_file->SColorMap` or
+///   `gif_file->Image.ColorMap`); no mutable reference other than `gif_file` may alias
+///   `*color_map` for the duration of this call.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutScreenDesc` (or
+// `rs_EGifPutScreenDesc` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutScreenDesc(
     gif_file: Option<&mut GifFileType>,
@@ -874,9 +1139,16 @@ pub unsafe extern "C" fn EGifPutScreenDesc(
     let color_map = if gif.SColorMap.as_deref().is_some_and(|stored| ptr::eq(stored, color_map)) {
         encoder::Arg::Current
     } else {
-        // SAFETY: the caller guarantees that `color_map` is null or points to a valid
-        // `ColorMapObject`. It may be owned by `gif` (e.g. `gif->Image.ColorMap`), so the
-        // reference only lives for the copy, before `gif` is used again.
+        // SAFETY:
+        // - Operation: `color_map.as_ref()`.
+        // - Contract: If `color_map` is non-null, it must be properly aligned for
+        //   `ColorMapObject`, point to an initialized valid `ColorMapObject` in a live allocation,
+        //   and not be mutably aliased during the lifetime of the temporary `&ColorMapObject`.
+        // - Evidence: By this function's `# Safety` precondition, `color_map` is null or aligned
+        //   and points to a valid `ColorMapObject`. Even if `color_map` points to another map
+        //   owned by `gif` (e.g. `gif.Image.ColorMap`), `gif` is not accessed while the temporary
+        //   `&ColorMapObject` is cloned, and the temporary reference is dropped before
+        //   `encoder::egif_put_screen_desc` mutates `gif`.
         encoder::Arg::New(unsafe { color_map.as_ref() }.cloned())
     };
     let r =
@@ -888,9 +1160,16 @@ pub unsafe extern "C" fn EGifPutScreenDesc(
 ///
 /// # Safety
 ///
-/// `color_map` must be null or point to a `ColorMapObject` with valid `ColorCount`, `BitsPerPixel`,
-/// and `Colors`. It may be one of `gif_file`'s own maps, e.g. `gif_file->Image.ColorMap` or
-/// `gif_file->SColorMap`.
+/// The caller must ensure that:
+/// - `color_map` is either null or properly aligned and points to a `ColorMapObject` within a
+///   live allocation with initialized, valid `ColorCount`, `BitsPerPixel`, and `Colors` fields
+///   satisfying `ColorMapObject::Colors`'s field safety invariant.
+/// - `color_map` may point to one of `gif_file`'s own maps (e.g. `gif_file->Image.ColorMap` or
+///   `gif_file->SColorMap`); no mutable reference other than `gif_file` may alias `*color_map`
+///   for the duration of this call.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutImageDesc` (or `rs_EGifPutImageDesc`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutImageDesc(
     gif_file: Option<&mut GifFileType>,
@@ -910,14 +1189,18 @@ pub unsafe extern "C" fn EGifPutImageDesc(
         if gif.Image.ColorMap.as_deref().is_some_and(|stored| ptr::eq(stored, color_map)) {
             encoder::Arg::Current
         } else {
-            // SAFETY: the caller guarantees that `color_map` is null or points to a
-            // `ColorMapObject` with valid `ColorCount`, `BitsPerPixel`, and `Colors` fields.
-            // It may be owned by `gif` (e.g. `gif->SColorMap` or a saved
-            // image's map), so the reference only lives for the copy, before `gif` is used
-            // again. Some callers may pass in uninitialized maps for SortFlag (which is never
-            // read in C), so we copy only the initialized fields.
-            // Partially uninit references are not UB as long as uninitialized fields are not
-            // read, cf. https://github.com/rust-lang/unsafe-code-guidelines/issues/414.
+            // SAFETY:
+            // - Operation: `color_map.as_ref()`.
+            // - Contract: If `color_map` is non-null, it must be properly aligned for
+            //   `ColorMapObject`, point to a live `ColorMapObject` whose accessed fields
+            //   (`ColorCount`, `BitsPerPixel`, `Colors`) are initialized and valid, and not be
+            //   mutably aliased during the lifetime of the temporary `&ColorMapObject`.
+            // - Evidence: By this function's `# Safety` precondition, `color_map` is null or
+            //   aligned and points to a `ColorMapObject` with valid `ColorCount`, `BitsPerPixel`,
+            //   and `Colors`. Even if `color_map` is owned by `gif` (e.g. `gif.SColorMap`), `gif`
+            //   is not accessed while the fields are copied, and the temporary reference is
+            //   dropped before `encoder::egif_put_image_desc` mutates `gif`. (Unaccessed fields
+            //   such as `SortFlag` are never read, cf. UCG#414.)
             encoder::Arg::New(unsafe { color_map.as_ref() }.map(|cm| ColorMapObject {
                 ColorCount: cm.ColorCount,
                 BitsPerPixel: cm.BitsPerPixel,
@@ -933,7 +1216,16 @@ pub unsafe extern "C" fn EGifPutImageDesc(
 ///
 /// # Safety
 ///
-/// The caller must guarantee that `line` points to at least `line_len` bytes.
+/// The caller must ensure that:
+/// - If `gif_file` is `Some(gif)`, `line` is non-null, and `line_len > 0`, `line` points to at
+///   least `line_len as usize` consecutive initialized `GifPixelType` elements within a single
+///   live allocation (`line_len as usize <= isize::MAX as usize`) that is valid for both reads and
+///   writes (because `EGifPutLine` masks pixel values in place).
+/// - For the duration of this call, the buffer pointed to by `line` does not alias `gif` (or any
+///   memory reachable from `gif`) and is not accessed through any other pointer or thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutLine` (or `rs_EGifPutLine` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutLine(
     gif_file: Option<&mut GifFileType>,
@@ -944,17 +1236,28 @@ pub unsafe extern "C" fn EGifPutLine(
         return GIF_ERROR;
     };
     let len = if line_len <= 0 { 0 } else { line_len as usize };
-    // SAFETY: caller guarantees `line` points to at least `len` bytes.
-    // When len is 0, we pass an empty slice; egif_put_line defaults to Image.Width.
+    // When len is 0 or line is null, we pass an empty slice; egif_put_line defaults to Image.Width.
     let line_slice = if len == 0 || line.is_null() {
         &mut []
     } else {
+        // SAFETY:
+        // - Operation: `core::slice::from_raw_parts_mut(line, len)`.
+        // - Contract: `line` must be non-null, 1-byte aligned, point to `len` consecutive
+        //   initialized `GifPixelType` elements valid for reads and writes within a single live
+        //   allocation (`len <= isize::MAX as usize`), and be unaliased for the slice's lifetime.
+        // - Evidence: `!line.is_null()` and `line_len > 0` (so `len <= c_int::MAX as usize <= isize::MAX as usize`)
+        //   are checked above, `align_of::<GifPixelType>() == 1`, and by this function's `# Safety`
+        //   precondition, `line` points to `len` initialized readable and writable bytes in a
+        //   single live allocation disjoint from `gif` for the duration of this call.
         unsafe { core::slice::from_raw_parts_mut(line, len) }
     };
     let r = encoder::egif_put_line(gif, line_slice);
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutPixel` (or `rs_EGifPutPixel` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifPutPixel(gif_file: Option<&mut GifFileType>, pixel: GifPixelType) -> c_int {
     let Some(gif) = gif_file else {
@@ -965,6 +1268,9 @@ pub extern "C" fn EGifPutPixel(gif_file: Option<&mut GifFileType>, pixel: GifPix
 }
 
 /// EGifPutComment — write a comment to the GIF.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutComment` (or `rs_EGifPutComment` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifPutComment(
     gif_file: Option<&mut GifFileType>,
@@ -980,6 +1286,9 @@ pub extern "C" fn EGifPutComment(
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutExtensionLeader` (or
+// `rs_EGifPutExtensionLeader` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifPutExtensionLeader(
     gif_file: Option<&mut GifFileType>,
@@ -996,7 +1305,15 @@ pub extern "C" fn EGifPutExtensionLeader(
 ///
 /// # Safety
 ///
-/// The caller must guarantee that `extension` points to at least `ext_len` bytes.
+/// The caller must ensure that:
+/// - If `gif_file` is `Some(gif)`, `extension` is non-null, and `ext_len > 0`, `extension` points
+///   to at least `ext_len as usize` consecutive initialized `u8` bytes valid for reads within a
+///   single live allocation (`ext_len as usize <= isize::MAX as usize`).
+/// - For the duration of this call, the bytes at `extension` do not alias `gif` and are not
+///   mutated by any other pointer or thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutExtensionBlock` (or
+// `rs_EGifPutExtensionBlock` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutExtensionBlock(
     gif_file: Option<&mut GifFileType>,
@@ -1009,13 +1326,25 @@ pub unsafe extern "C" fn EGifPutExtensionBlock(
     let ext_data = if extension.is_null() || ext_len <= 0 {
         &[]
     } else {
-        // SAFETY: caller guarantees extension points to at least ext_len bytes.
+        // SAFETY:
+        // - Operation: `core::slice::from_raw_parts(extension as *const u8, ext_len as usize)`.
+        // - Contract: `extension` must be non-null, 1-byte aligned, point to `ext_len as usize`
+        //   consecutive initialized `u8` bytes within a single live allocation
+        //   (`ext_len as usize <= isize::MAX as usize`), and not be mutated for the slice's lifetime.
+        // - Evidence: `!extension.is_null()` and `ext_len > 0` (so
+        //   `ext_len as usize <= c_int::MAX as usize <= isize::MAX as usize`) are checked above,
+        //   `align_of::<u8>() == 1`, and by this function's `# Safety` precondition, `extension`
+        //   points to `ext_len as usize` initialized bytes in a single live allocation disjoint
+        //   from `gif` and unmutated for the duration of this call.
         unsafe { core::slice::from_raw_parts(extension as *const u8, ext_len as usize) }
     };
     let r = encoder::egif_put_extension_block(gif, ext_data);
     gif.result_to_status(r)
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutExtensionTrailer` (or
+// `rs_EGifPutExtensionTrailer` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifPutExtensionTrailer(gif_file: Option<&mut GifFileType>) -> c_int {
     let Some(gif) = gif_file else {
@@ -1029,7 +1358,15 @@ pub extern "C" fn EGifPutExtensionTrailer(gif_file: Option<&mut GifFileType>) ->
 ///
 /// # Safety
 ///
-/// The caller must guarantee that `extension` points to at least `ext_len` bytes.
+/// The caller must ensure that:
+/// - If `gif_file` is `Some(gif)`, `extension` is non-null, and `ext_len > 0`, `extension` points
+///   to at least `ext_len as usize` consecutive initialized `u8` bytes valid for reads within a
+///   single live allocation (`ext_len as usize <= isize::MAX as usize`).
+/// - For the duration of this call, the bytes at `extension` do not alias `gif` and are not
+///   mutated by any other pointer or thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutExtension` (or `rs_EGifPutExtension`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutExtension(
     gif_file: Option<&mut GifFileType>,
@@ -1043,7 +1380,16 @@ pub unsafe extern "C" fn EGifPutExtension(
     let ext_data = if extension.is_null() || ext_len <= 0 {
         &[]
     } else {
-        // SAFETY: caller guarantees extension points to at least ext_len bytes.
+        // SAFETY:
+        // - Operation: `core::slice::from_raw_parts(extension as *const u8, ext_len as usize)`.
+        // - Contract: `extension` must be non-null, 1-byte aligned, point to `ext_len as usize`
+        //   consecutive initialized `u8` bytes within a single live allocation
+        //   (`ext_len as usize <= isize::MAX as usize`), and not be mutated for the slice's lifetime.
+        // - Evidence: `!extension.is_null()` and `ext_len > 0` (so
+        //   `ext_len as usize <= c_int::MAX as usize <= isize::MAX as usize`) are checked above,
+        //   `align_of::<u8>() == 1`, and by this function's `# Safety` precondition, `extension`
+        //   points to `ext_len as usize` initialized bytes in a single live allocation disjoint
+        //   from `gif` and unmutated for the duration of this call.
         unsafe { core::slice::from_raw_parts(extension as *const u8, ext_len as usize) }
     };
     let r = encoder::egif_put_extension(gif, ext_code, ext_data);
@@ -1054,13 +1400,19 @@ pub unsafe extern "C" fn EGifPutExtension(
 ///
 /// # Safety
 ///
-/// The caller must guarantee that `code_block` is a valid Pascal-string, i.e.
-/// `code_block[0]` is the length of the string and `code_block[1..]` are the
-/// bytes of the string, and that the pointer is valid for at least that many
-/// bytes.
+/// The caller must ensure that:
+/// - If `gif_file` is `Some(gif)` and `code_block` is non-null, `code_block` points to a valid
+///   Pascal-style byte block within a single live allocation where `code_block[0]` is initialized
+///   and all `(*code_block as usize) + 1` bytes `code_block[0..=(*code_block as usize)]` are
+///   consecutive initialized `GifByteType` values valid for reads.
+/// - For the duration of this call, the bytes at `code_block` do not alias `gif` and are not
+///   mutated by any other pointer or thread.
 ///
 /// The `code_size` parameter is unused and should be ignored. This behavior
 /// matches the C library.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutCode` (or `rs_EGifPutCode` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutCode(
     gif_file: Option<&mut GifFileType>,
@@ -1073,8 +1425,22 @@ pub unsafe extern "C" fn EGifPutCode(
     if code_block.is_null() {
         return GIF_ERROR;
     }
-    // SAFETY: code_block is non-null (checked above). Pascal-string: block[0] = len.
+    // SAFETY:
+    // - Operation: dereferencing `*code_block` to read the Pascal-block length byte.
+    // - Contract: `code_block` must be non-null, 1-byte aligned, and point to an initialized
+    //   `GifByteType` valid for reads.
+    // - Evidence: `!code_block.is_null()` is checked above, `align_of::<GifByteType>() == 1`, and
+    //   by this function's `# Safety` precondition, `code_block[0]` is an initialized byte in a
+    //   live allocation disjoint from `gif`.
     let len = unsafe { *code_block } as usize + 1;
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts(code_block, len)`.
+    // - Contract: `code_block` must be non-null, 1-byte aligned, point to `len` (`1..=256`)
+    //   consecutive initialized `GifByteType` elements within a single live allocation
+    //   (`len <= 256 <= isize::MAX as usize`), and not be mutated for the slice's lifetime.
+    // - Evidence: `!code_block.is_null()` is checked above, `len` is at most `u8::MAX as usize + 1 == 256`,
+    //   and by this function's `# Safety` precondition, all `len` bytes of the Pascal-style block
+    //   lie in a single live allocation disjoint from `gif` and unmutated during this call.
     let block = unsafe { core::slice::from_raw_parts(code_block, len) };
     let r = encoder::egif_put_code(gif, block);
     gif.result_to_status(r)
@@ -1084,10 +1450,16 @@ pub unsafe extern "C" fn EGifPutCode(
 ///
 /// # Safety
 ///
-/// The caller must guarantee that `code_block` is a valid Pascal-string, i.e.
-/// `code_block[0]` is the length of the string and `code_block[1..]` are the
-/// bytes of the string, and that the pointer is valid for at least that many
-/// bytes.
+/// The caller must ensure that:
+/// - If `gif_file` is `Some(gif)` and `code_block` is non-null, `code_block` points to a valid
+///   Pascal-style byte block within a single live allocation where `code_block[0]` is initialized
+///   and all `(*code_block as usize) + 1` bytes `code_block[0..=(*code_block as usize)]` are
+///   consecutive initialized `GifByteType` values valid for reads.
+/// - For the duration of this call, the bytes at `code_block` do not alias `gif` and are not
+///   mutated by any other pointer or thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifPutCodeNext` (or `rs_EGifPutCodeNext` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutCodeNext(
     gif_file: Option<&mut GifFileType>,
@@ -1099,8 +1471,23 @@ pub unsafe extern "C" fn EGifPutCodeNext(
     let block = if code_block.is_null() {
         None
     } else {
-        // SAFETY: code_block is non-null (checked above). Pascal-string: block[0] = len.
+        // SAFETY:
+        // - Operation: dereferencing `*code_block` to read the Pascal-block length byte.
+        // - Contract: `code_block` must be non-null, 1-byte aligned, and point to an initialized
+        //   `GifByteType` valid for reads.
+        // - Evidence: `!code_block.is_null()` is checked above, `align_of::<GifByteType>() == 1`,
+        //   and by this function's `# Safety` precondition, `code_block[0]` is an initialized byte
+        //   in a live allocation disjoint from `gif`.
         let len = unsafe { *code_block } as usize + 1;
+        // SAFETY:
+        // - Operation: `core::slice::from_raw_parts(code_block, len)`.
+        // - Contract: `code_block` must be non-null, 1-byte aligned, point to `len` (`1..=256`)
+        //   consecutive initialized `GifByteType` elements within a single live allocation
+        //   (`len <= 256 <= isize::MAX as usize`), and not be mutated for the slice's lifetime.
+        // - Evidence: `!code_block.is_null()` is checked above, `len` is at most
+        //   `u8::MAX as usize + 1 == 256`, and by this function's `# Safety` precondition, all
+        //   `len` bytes of the Pascal-style block lie in a single live allocation disjoint from
+        //   `gif` and unmutated during this call.
         let block = unsafe { core::slice::from_raw_parts(code_block, len) };
         Some(block)
     };
@@ -1111,6 +1498,9 @@ pub unsafe extern "C" fn EGifPutCodeNext(
 /// EGifSpew — write an in-core representation of a GIF to the output.
 ///
 /// This is a consume-and-close operation.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifSpew` (or `rs_EGifSpew` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifSpew(
     gif_file: Option<Box<GifFileType>>,
@@ -1151,6 +1541,9 @@ pub extern "C" fn EGifSpew(
 // ---------------------------------------------------------------------------
 
 /// EGifGCBToExtension — write a Graphics Control Block to an extension block.
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifGCBToExtension` (or
+// `rs_EGifGCBToExtension` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib
+// and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifGCBToExtension(
     gcb: Option<&GraphicsControlBlock>,
@@ -1166,6 +1559,9 @@ pub extern "C" fn EGifGCBToExtension(
     4
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `EGifGCBToSavedExtension` (or
+// `rs_EGifGCBToSavedExtension` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn EGifGCBToSavedExtension(
     gcb: Option<&GraphicsControlBlock>,
@@ -1189,9 +1585,14 @@ pub extern "C" fn EGifGCBToSavedExtension(
 // ---------------------------------------------------------------------------
 
 /// Re-export the font table with its canonical C name.
+// SAFETY: Exports the canonical giflib C ABI static `GifAsciiTable8x8`; `gif_guard_b` prevents
+// linking alongside C giflib and `gif_signatures_test` verifies ABI type compatibility.
 #[unsafe(no_mangle)]
 pub static GifAsciiTable8x8: [[u8; font::GIF_FONT_WIDTH]; 128] = font::GIF_ASCII_TABLE_8X8;
 
+// SAFETY: Exports the canonical giflib C ABI symbol `GifDrawText8x8` (or `rs_GifDrawText8x8` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifDrawText8x8(
     image: Option<&mut SavedImage>,
@@ -1211,6 +1612,9 @@ pub extern "C" fn GifDrawText8x8(
 }
 
 /// Matches GifDrawBox in C — draws the outline of a rectangle.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifDrawBox` (or `rs_GifDrawBox` in
+// `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and `gif_signatures_test`
+// verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifDrawBox(
     image: Option<&mut SavedImage>,
@@ -1227,6 +1631,9 @@ pub extern "C" fn GifDrawBox(
 }
 
 /// Matches GifDrawRectangle in C — fills a rectangle.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifDrawRectangle` (or `rs_GifDrawRectangle`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifDrawRectangle(
     image: Option<&mut SavedImage>,
@@ -1242,6 +1649,9 @@ pub extern "C" fn GifDrawRectangle(
     font::gif_draw_rectangle(image, x, y, w, d, color);
 }
 
+// SAFETY: Exports the canonical giflib C ABI symbol `GifDrawBoxedText8x8` (or
+// `rs_GifDrawBoxedText8x8` in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C
+// giflib and `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub extern "C" fn GifDrawBoxedText8x8(
     image: Option<&mut SavedImage>,
@@ -1268,9 +1678,23 @@ pub extern "C" fn GifDrawBoxedText8x8(
 
 /// # Safety
 ///
-/// The caller must guarantee that `red_input`, `green_input`, `blue_input`, and
-/// `output_buffer` point to buffers of size at least `width * height`, and that
-/// `output_color_map` points to a buffer of size at least `*color_map_size`.
+/// The caller must ensure that:
+/// - If `color_map_size` is `Some(cms)` with `1 <= *cms <= 256`, all five buffer pointers are
+///   non-null, and `num_pixels = (width as usize).checked_mul(height as usize)` satisfies
+///   `num_pixels <= isize::MAX as usize`:
+///   - `red_input`, `green_input`, and `blue_input` each point to at least `num_pixels`
+///     consecutive initialized `GifByteType` elements valid for reads within a single live
+///     allocation.
+///   - `output_buffer` points to at least `num_pixels` consecutive `GifByteType` elements valid
+///     for writes within a single live allocation.
+///   - `output_color_map` points to at least `*cms as usize` consecutive `GifColorType` elements
+///     valid for writes within a single live allocation.
+/// - For the duration of this call, `output_buffer`, `output_color_map`, and `color_map_size` do
+///   not alias each other or any of `red_input`, `green_input`, or `blue_input`, and none of the
+///   buffers are mutated by any other pointer or thread.
+// SAFETY: Exports the canonical giflib C ABI symbol `GifQuantizeBuffer` (or `rs_GifQuantizeBuffer`
+// in `gif_rs_prefixed`); `gif_guard_b` prevents linking alongside C giflib and
+// `gif_signatures_test` verifies ABI signature compatibility.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifQuantizeBuffer(
     width: c_uint,
@@ -1285,9 +1709,15 @@ pub unsafe extern "C" fn GifQuantizeBuffer(
     let Some(cms) = color_map_size else {
         return GIF_ERROR;
     };
+    let Ok(cms_len) = usize::try_from(*cms) else {
+        return GIF_ERROR;
+    };
     let Some(num_pixels) = (width as usize).checked_mul(height as usize) else {
         return GIF_ERROR;
     };
+    if !(1..=256).contains(&cms_len) || num_pixels > isize::MAX as usize {
+        return GIF_ERROR;
+    }
 
     if red_input.is_null()
         || green_input.is_null()
@@ -1298,17 +1728,111 @@ pub unsafe extern "C" fn GifQuantizeBuffer(
         return GIF_ERROR;
     }
 
-    // SAFETY: caller guarantees each input buffer has at least width*height elements.
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts(red_input, num_pixels)`.
+    // - Contract: `red_input` must be non-null, 1-byte aligned, point to `num_pixels` consecutive
+    //   initialized `GifByteType` elements in a single live allocation (`num_pixels <= isize::MAX as usize`),
+    //   and not be mutated during the call.
+    // - Evidence: `!red_input.is_null()` and `num_pixels <= isize::MAX as usize` are checked above,
+    //   `align_of::<GifByteType>() == 1`, and the caller's `# Safety` precondition guarantees
+    //   `red_input` points to `num_pixels` initialized bytes in a single allocation not aliased by
+    //   any mutable buffer.
     let red = unsafe { core::slice::from_raw_parts(red_input, num_pixels) };
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts(green_input, num_pixels)`.
+    // - Contract & Evidence: Same as `red_input` above for `green_input`.
     let green = unsafe { core::slice::from_raw_parts(green_input, num_pixels) };
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts(blue_input, num_pixels)`.
+    // - Contract & Evidence: Same as `red_input` above for `blue_input`.
     let blue = unsafe { core::slice::from_raw_parts(blue_input, num_pixels) };
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts_mut(output_buffer, num_pixels)`.
+    // - Contract: `output_buffer` must be non-null, 1-byte aligned, point to `num_pixels`
+    //   consecutive `GifByteType` elements valid for reads and writes in a single live allocation
+    //   (`num_pixels <= isize::MAX as usize`), and be unaliased during the call.
+    // - Evidence: `!output_buffer.is_null()` and `num_pixels <= isize::MAX as usize` are checked
+    //   above, `align_of::<GifByteType>() == 1`, `quantize::gif_quantize_buffer` only writes into
+    //   `out_buf` without reading uninitialized bytes (cf. UCG#414), and the caller's `# Safety`
+    //   precondition guarantees `output_buffer` points to `num_pixels` writable bytes in a single
+    //   live allocation disjoint from all other arguments.
     let out_buf = unsafe { core::slice::from_raw_parts_mut(output_buffer, num_pixels) };
-    // SAFETY: caller guarantees output_color_map has at least cms entries.
-    let out_cmap = unsafe { core::slice::from_raw_parts_mut(output_color_map, *cms as usize) };
+    // SAFETY:
+    // - Operation: `core::slice::from_raw_parts_mut(output_color_map, cms_len)`.
+    // - Contract: `output_color_map` must be non-null, 1-byte aligned
+    //   (`align_of::<GifColorType>() == 1`), point to `cms_len` (`1..=256`) consecutive
+    //   `GifColorType` elements valid for reads and writes in a single live allocation
+    //   (`cms_len * 3 <= 768 <= isize::MAX as usize`), and be unaliased during the call.
+    // - Evidence: `!output_color_map.is_null()` and `(1..=256).contains(&cms_len)` are checked
+    //   above, `quantize::gif_quantize_buffer` only writes into `out_cmap` without reading
+    //   uninitialized bytes (cf. UCG#414), and the caller's `# Safety` precondition guarantees
+    //   `output_color_map` points to at least `cms_len` writable `GifColorType` elements in a
+    //   single live allocation disjoint from all other arguments.
+    let out_cmap = unsafe { core::slice::from_raw_parts_mut(output_color_map, cms_len) };
 
     if quantize::gif_quantize_buffer(width, height, cms, red, green, blue, out_buf, out_cmap) {
         GIF_OK
     } else {
         GIF_ERROR
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gif_quantize_buffer_rejects_out_of_range_color_map_size() {
+        let rgb = [0u8; 4];
+        let mut out_buf = [0u8; 4];
+        let mut out_cmap = [GifColorType { Red: 0, Green: 0, Blue: 0 }; 256];
+
+        for invalid_size in [-1, 0, 257] {
+            let mut cms = invalid_size;
+            // SAFETY:
+            // - Operation: calling `GifQuantizeBuffer` with an out-of-range `cms`.
+            // - Contract: When `*color_map_size` is outside `1..=256`, `GifQuantizeBuffer` returns
+            //   `GIF_ERROR` before dereferencing any buffer pointers; moreover, all five pointers
+            //   point to valid, disjoint stack arrays of 4 pixels and 256 colors.
+            // - Evidence: `invalid_size` is outside `1..=256`, and `rgb`, `out_buf`, and
+            //   `out_cmap` are live stack arrays that do not alias each other.
+            let status = unsafe {
+                GifQuantizeBuffer(
+                    2,
+                    2,
+                    Some(&mut cms),
+                    rgb.as_ptr(),
+                    rgb.as_ptr(),
+                    rgb.as_ptr(),
+                    out_buf.as_mut_ptr(),
+                    out_cmap.as_mut_ptr(),
+                )
+            };
+            assert_eq!(status, GIF_ERROR);
+            assert_eq!(cms, invalid_size);
+        }
+    }
+
+    #[test]
+    fn dgif_extension_to_gcb_rejects_invalid_extension_length() {
+        let ext = [0u8; 8];
+        let mut gcb = GraphicsControlBlock {
+            DisposalMode: 0,
+            UserInputFlag: false,
+            DelayTime: 0,
+            TransparentColor: -1,
+        };
+
+        for invalid_len in [0usize, 3, 5, usize::MAX] {
+            // SAFETY:
+            // - Operation: calling `DGifExtensionToGCB` with `gif_extension_length != 4`.
+            // - Contract: When `gif_extension_length != 4`, `DGifExtensionToGCB` returns
+            //   `GIF_ERROR` without reading from `gif_extension`.
+            // - Evidence: `invalid_len != 4` holds for every tested length, and `ext` and `gcb`
+            //   are live, disjoint stack values.
+            let status = unsafe { DGifExtensionToGCB(invalid_len, ext.as_ptr(), Some(&mut gcb)) };
+            assert_eq!(status, GIF_ERROR);
+            assert_eq!(gcb.DelayTime, 0);
+        }
     }
 }
