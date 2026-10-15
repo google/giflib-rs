@@ -271,8 +271,8 @@ fn subdiv_color_map(
         let parent_rgb_width = subdivs[index].rgb_width;
 
         subdivs[new_idx].color_indices = second_half;
-        subdivs[new_idx].count = subdivs[index].count - count;
-        subdivs[index].count = count;
+        subdivs[new_idx].count = count;
+        subdivs[index].count -= count;
         subdivs[new_idx].num_entries = subdivs[index].num_entries - num_entries;
         subdivs[index].num_entries = num_entries;
 
