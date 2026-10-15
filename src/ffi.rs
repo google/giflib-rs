@@ -1270,7 +1270,8 @@ pub extern "C" fn GifDrawBoxedText8x8(
 ///
 /// The caller must guarantee that `red_input`, `green_input`, `blue_input`, and
 /// `output_buffer` point to buffers of size at least `width * height`, and that
-/// `output_color_map` points to a buffer of size at least `*color_map_size`.
+/// `output_color_map` points to a buffer of size at least `max(*color_map_size, 1)`.
+/// Like C, the function always writes entry 0, even when `*color_map_size` is 0.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifQuantizeBuffer(
     width: c_uint,
@@ -1303,8 +1304,9 @@ pub unsafe extern "C" fn GifQuantizeBuffer(
     let green = unsafe { core::slice::from_raw_parts(green_input, num_pixels) };
     let blue = unsafe { core::slice::from_raw_parts(blue_input, num_pixels) };
     let out_buf = unsafe { core::slice::from_raw_parts_mut(output_buffer, num_pixels) };
-    // SAFETY: caller guarantees output_color_map has at least cms entries.
-    let out_cmap = unsafe { core::slice::from_raw_parts_mut(output_color_map, *cms as usize) };
+    // SAFETY: caller guarantees output_color_map has at least max(cms, 1) entries.
+    let map_len = (*cms as usize).max(1);
+    let out_cmap = unsafe { core::slice::from_raw_parts_mut(output_color_map, map_len) };
 
     if quantize::gif_quantize_buffer(width, height, cms, red, green, blue, out_buf, out_cmap) {
         GIF_OK
