@@ -1270,7 +1270,8 @@ pub extern "C" fn GifDrawBoxedText8x8(
 ///
 /// The caller must guarantee that `red_input`, `green_input`, `blue_input`, and
 /// `output_buffer` point to buffers of size at least `width * height`, and that
-/// `output_color_map` points to a buffer of size at least `*color_map_size`.
+/// `output_color_map` points to a buffer of size at least `max(*color_map_size, 1)`.
+/// Like C, the function always writes entry 0, even when `*color_map_size` is 0.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn GifQuantizeBuffer(
     width: c_uint,
