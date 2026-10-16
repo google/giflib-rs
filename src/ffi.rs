@@ -1285,6 +1285,9 @@ pub unsafe extern "C" fn GifQuantizeBuffer(
     let Some(cms) = color_map_size else {
         return GIF_ERROR;
     };
+    if !(1..=256).contains(cms) {
+        return GIF_ERROR;
+    }
     let Some(num_pixels) = (width as usize).checked_mul(height as usize) else {
         return GIF_ERROR;
     };
