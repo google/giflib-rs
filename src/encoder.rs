@@ -506,13 +506,13 @@ pub fn egif_put_extension(
 // ---------------------------------------------------------------------------
 
 /// Matches EGifPutCode in C.
-pub fn egif_put_code(gif: &mut GifFileType, code_block: &[u8]) -> Result<(), GifError> {
+pub fn egif_put_code(gif: &mut GifFileType, code_block: Option<&[u8]>) -> Result<(), GifError> {
     if !gif.Private.io.is_writable() {
         return Err(GifError::ENotWriteable);
     }
 
     // No need to dump code size as Compression set up does any for us.
-    egif_put_code_next_bytes(gif, Some(code_block))
+    egif_put_code_next_bytes(gif, code_block)
 }
 
 /// Matches EGifPutCodeNext in C.

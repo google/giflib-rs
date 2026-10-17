@@ -1070,12 +1070,13 @@ pub unsafe extern "C" fn EGifPutCode(
     let Some(gif) = gif_file else {
         return GIF_ERROR;
     };
-    if code_block.is_null() {
-        return GIF_ERROR;
-    }
-    // SAFETY: code_block is non-null (checked above). Pascal-string: block[0] = len.
-    let len = unsafe { *code_block } as usize + 1;
-    let block = unsafe { core::slice::from_raw_parts(code_block, len) };
+    let block = if code_block.is_null() {
+        None
+    } else {
+        // SAFETY: code_block is non-null (checked above). Pascal-string: block[0] = len.
+        let len = unsafe { *code_block } as usize + 1;
+        Some(unsafe { core::slice::from_raw_parts(code_block, len) })
+    };
     let r = encoder::egif_put_code(gif, block);
     gif.result_to_status(r)
 }
