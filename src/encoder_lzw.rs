@@ -326,5 +326,5 @@ fn egif_buffered_output(gif: &mut GifFileType, c: c_int) -> Result<(), GifError>
 
 /// Get the code mask for pixel masking.
 pub(crate) fn get_code_mask(bits_per_pixel: c_int) -> GifPixelType {
-    CODE_MASK[bits_per_pixel as usize]
+    CODE_MASK.get(bits_per_pixel as usize).copied().unwrap_or(0x00)
 }
