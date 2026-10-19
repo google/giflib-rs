@@ -246,23 +246,18 @@ pub(crate) fn gif_draw_rectangle(
     d: c_int,
     color: c_int,
 ) {
-    if x < 0 || y < 0 || w <= 0 || d <= 0 {
+    if w <= 0 || d <= 0 {
         return;
     }
-    let width = image.ImageDesc.Width as usize;
+    let width = image.ImageDesc.Width.max(0) as i64;
+    let height = image.ImageDesc.Height.max(0) as i64;
+    let (x0, x1) = (x.max(0) as i64, (x as i64 + w as i64).min(width));
+    let (y0, y1) = (y.max(0) as i64, (y as i64 + d as i64).min(height));
     let raster = image.raster_bits_mut();
-    let Some(bp) = width.checked_mul(y as usize).and_then(|v| v.checked_add(x as usize)) else {
-        return;
-    };
 
-    for i in 0..d as usize {
-        let Some(start) = i.checked_mul(width).and_then(|v| bp.checked_add(v)) else {
-            return;
-        };
-        let Some(end) = start.checked_add(w as usize) else {
-            return;
-        };
-        if end <= raster.len() {
+    for row in y0..y1 {
+        let (start, end) = ((row * width + x0) as usize, (row * width + x1) as usize);
+        if x0 < x1 && end <= raster.len() {
             raster[start..end].fill(color as u8);
         }
     }
