@@ -273,12 +273,16 @@ pub(crate) fn gif_draw_boxed_text8x8(
     bg: c_int,
     fg: c_int,
 ) {
+    if border < 0 {
+        return;
+    }
+
     // Compute text dimensions.
     let mut j = 0i32;
     let mut line_count = 0i32;
     let mut text_width = 0i32;
     for &ch in legend {
-        if ch == b'\r' {
+        if ch == b'\r' || ch == b'\n' {
             if j > text_width {
                 text_width = j;
             }
@@ -292,23 +296,37 @@ pub(crate) fn gif_draw_boxed_text8x8(
     if j > text_width {
         text_width = j;
     }
+    let box_w = 2 * border as i64 + text_width as i64 * GIF_FONT_WIDTH as i64;
+    let box_h = 2 * border as i64 + line_count as i64 * GIF_FONT_HEIGHT as i64;
+    let max = c_int::MAX as i64;
 
     // Fill the box
     gif_draw_rectangle(
         image,
-        x + 1,
-        y + 1,
-        border + text_width * GIF_FONT_WIDTH as c_int + border - 1,
-        border + line_count * GIF_FONT_HEIGHT as c_int + border - 1,
+        x.wrapping_add(1),
+        y.wrapping_add(1),
+        (box_w - 1).min(max) as c_int,
+        (box_h - 1).min(max) as c_int,
         bg,
     );
 
-    // Split on \r and draw each line
+    // Split on \r, \n, \r\n or \n\r and draw each line
+    let mut rest = Some(legend);
+    let lines = core::iter::from_fn(|| {
+        let r = rest?;
+        let Some(e) = r.iter().position(|&b| b == b'\r' || b == b'\n') else {
+            rest = None;
+            return Some(r);
+        };
+        let pair = matches!(r.get(e..e + 2), Some(b"\r\n" | b"\n\r"));
+        rest = Some(&r[e + 1 + pair as usize..]);
+        Some(&r[..e])
+    });
     let mut line_idx = 0i32;
-    for line in legend.split(|&b| b == b'\r') {
+    for line in lines {
         let (text, leadspace) = if line.first() == Some(&b'\t') {
             let trimmed = &line[1..];
-            let lead = (text_width - trimmed.len() as i32) / 2;
+            let lead = (text_width - trimmed.len() as i32).max(0) / 2;
             (trimmed, lead)
         } else {
             (line, 0)
@@ -316,8 +334,8 @@ pub(crate) fn gif_draw_boxed_text8x8(
 
         gif_draw_text8x8(
             image,
-            x + border + leadspace * GIF_FONT_WIDTH as c_int,
-            y + border + GIF_FONT_HEIGHT as c_int * line_idx,
+            x.wrapping_add(border).wrapping_add(leadspace * GIF_FONT_WIDTH as c_int),
+            y.wrapping_add(border).wrapping_add(GIF_FONT_HEIGHT as c_int * line_idx),
             text,
             fg,
         );
@@ -329,8 +347,8 @@ pub(crate) fn gif_draw_boxed_text8x8(
         image,
         x,
         y,
-        border + text_width * GIF_FONT_WIDTH as c_int + border,
-        border + line_count * GIF_FONT_HEIGHT as c_int + border,
+        box_w.min(max) as c_int,
+        box_h.min(max) as c_int,
         fg,
     );
 }
