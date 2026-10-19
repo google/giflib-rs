@@ -172,29 +172,14 @@ pub(crate) fn gif_draw_text8x8(
     legend: &[u8],
     color: c_int,
 ) {
-    if x < 0 || y < 0 {
-        return;
-    }
-
-    let width = image.ImageDesc.Width as usize;
-    let raster = image.raster_bits_mut();
-
     for row in 0..GIF_FONT_HEIGHT {
-        let Some(base_offset) =
-            width.checked_mul(y as usize + row).and_then(|v| v.checked_add(x as usize))
-        else {
-            return;
-        };
         let mut col = 0usize;
         for &ch_byte in legend {
-            let ch = (ch_byte & 0x7f) as usize;
+            let ch = ch_byte as usize;
             for j in 0..GIF_FONT_WIDTH {
-                if ((GIF_ASCII_TABLE_8X8[ch][row] as u16) & (1u16 << (GIF_FONT_WIDTH - j))) != 0 {
-                    if let Some(idx) = base_offset.checked_add(col) {
-                        if idx < raster.len() {
-                            raster[idx] = color as GifByteType;
-                        }
-                    }
+                if ch < 128 && GIF_ASCII_TABLE_8X8[ch][row] & (1 << (GIF_FONT_WIDTH - 1 - j)) != 0 {
+                    let px = x.saturating_add(col as c_int);
+                    put_pixel(image, px, y.saturating_add(row as c_int), color);
                 }
                 col += 1;
             }
