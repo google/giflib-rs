@@ -276,13 +276,17 @@ pub unsafe extern "C" fn DGifGetLine(
     line: *mut GifPixelType,
     line_len: c_int,
 ) -> c_int {
-    if line.is_null() || line_len < 0 {
+    if line.is_null() {
         return GIF_ERROR;
     }
     let Some(gif) = gif_file else {
         return GIF_ERROR;
     };
-    let len = if line_len == 0 { gif.Image.Width.max(0) as usize } else { line_len as usize };
+    let line_len = if line_len == 0 { gif.Image.Width } else { line_len };
+    if line_len < 0 && gif.Private.io.is_readable() {
+        return gif.result_to_status(Err(GifError::DDataTooBig));
+    }
+    let len = line_len.max(0) as usize;
     // SAFETY: caller guarantees safety invariants on `line` and `line_len`.
     let line_slice = unsafe { core::slice::from_raw_parts_mut(line, len) };
     let r = decoder::dgif_get_line(gif, line_slice);
