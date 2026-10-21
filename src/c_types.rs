@@ -188,8 +188,9 @@ impl ExtensionBlock {
 #[derive(Debug)]
 pub struct SavedImage {
     pub ImageDesc: GifImageDesc,
-    // Safety invariant: When the image dimensions are valid (1..=65535), the length of this array
-    // is `SavedImage::size`, which is equal to `ImageDesc.Width * ImageDesc.Height`.
+    // Safety invariant: When the image dimensions are valid (both positive, with a product that
+    // fits in `c_int`), the length of this array is `SavedImage::size`, which is equal to
+    // `ImageDesc.Width * ImageDesc.Height`.
     pub RasterBits: OwnedCBufPtr<GifByteType>,
     pub ExtensionBlockCount: c_int,
     // Safety invariant: the length of this array is `ExtensionBlockCount`.
@@ -199,10 +200,14 @@ pub struct SavedImage {
 // Array accessors
 impl SavedImage {
     /// Returns the validated size of the raster bits in bytes, or `None` if the image
-    /// dimensions are out of range (0 or >65535).
+    /// dimensions are out of range (not positive, or a product past `c_int::MAX`).
+    ///
+    /// A GIF stores each dimension in 16 bits, so no decoded image is wider or taller
+    /// than 65535, but a caller may build a larger `SavedImage` itself: `Width` and
+    /// `Height` are `int`s, and giflib's drawing functions accept any positive pair.
     pub fn size(&self) -> Option<c_int> {
         match (self.ImageDesc.Width, self.ImageDesc.Height) {
-            (1..=65535, 1..=65535) => self.ImageDesc.Width.checked_mul(self.ImageDesc.Height),
+            (1.., 1..) => self.ImageDesc.Width.checked_mul(self.ImageDesc.Height),
             _ => None,
         }
     }
