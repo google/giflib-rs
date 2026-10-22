@@ -28,7 +28,7 @@
 use crate::c_types::{
     ColorMapObject, ExtensionBlock, GifByteType, GifColorType, GifFileType, GifImageDesc,
     GifPixelType, GifRecordType, GraphicsControlBlock, InputFunc, OutputFunc, ReadCallback,
-    SavedImage, WriteCallback, D_GIF_ERR_CLOSE_FAILED, E_GIF_ERR_CLOSE_FAILED,
+    SavedImage, WriteCallback, D_GIF_ERR_CLOSE_FAILED, D_GIF_SUCCEEDED, E_GIF_ERR_CLOSE_FAILED,
     E_GIF_ERR_NOT_WRITEABLE, E_GIF_SUCCEEDED, GIF87_STAMP, GIF_ERROR, GIF_OK,
 };
 use crate::decoder;
@@ -197,7 +197,18 @@ pub extern "C" fn DGifCloseFile(
     error: Option<&mut c_int>,
 ) -> c_int {
     match gif_file {
-        Some(_) => GIF_OK, // Box<GifFileType> drops here, triggering Drop impl.
+        Some(gif) if !gif.Private.io.is_readable() => {
+            if let Some(error) = error {
+                *error = GifError::DNotReadable as c_int;
+            }
+            GIF_ERROR
+        }
+        Some(_) => {
+            if let Some(error) = error {
+                *error = D_GIF_SUCCEEDED;
+            }
+            GIF_OK // Box<GifFileType> drops here, triggering Drop impl.
+        }
         None => {
             if let Some(error) = error {
                 *error = D_GIF_ERR_CLOSE_FAILED;
@@ -831,6 +842,9 @@ pub extern "C" fn EGifCloseFile(
         return GIF_ERROR;
     }
 
+    if let Some(error) = error {
+        *error = E_GIF_SUCCEEDED;
+    }
     GIF_OK
 }
 
