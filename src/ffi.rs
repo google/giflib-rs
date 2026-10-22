@@ -933,7 +933,8 @@ pub unsafe extern "C" fn EGifPutImageDesc(
 ///
 /// # Safety
 ///
-/// The caller must guarantee that `line` points to at least `line_len` bytes.
+/// The caller must guarantee that `line` points to at least `line_len` bytes, or
+/// `Image.Width` bytes when `line_len` is 0, and to at least one byte.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn EGifPutLine(
     gif_file: Option<&mut GifFileType>,
