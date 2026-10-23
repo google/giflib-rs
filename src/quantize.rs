@@ -110,15 +110,8 @@ pub fn gif_quantize_buffer(
     let non_empty: Vec<usize> =
         (0..COLOR_ARRAY_SIZE).filter(|&i| color_array[i].count > 0).collect();
 
-    if non_empty.is_empty() {
-        // No colors sampled — nothing to quantize. Match C behavior: return OK
-        // with empty color map.
-        *color_map_size = 0;
-        return true;
-    }
-
     subdivs[0].color_indices = non_empty;
-    subdivs[0].num_entries = subdivs[0].color_indices.len();
+    subdivs[0].num_entries = subdivs[0].color_indices.len().max(1);
     subdivs[0].count = (width as i64) * (height as i64);
 
     let mut new_color_map_size: usize = 1;
