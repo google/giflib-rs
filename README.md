@@ -29,6 +29,12 @@ to put up guardrails where possible.
    returns an error on failure. The C implementation silently ignores write
    failures and returns `GIF_OK`.  
    This is a deliberate change to improve over the C version.
+ - **`EGifPutLine` with a `LineLen` of 0**: C treats a `LineLen` of 0 as
+   `GifFile->Image.Width` and reads that many pixels from the line. Rust returns
+   `GIF_ERROR` and sets `GifFile->Error = E_GIF_ERR_DATA_TOO_BIG` (206), as both
+   versions do for a negative `LineLen`.  
+   This is a deliberate change: C reads past the end of a line that holds fewer
+   than `Image.Width` pixels.
  - **OOM Handling:** The Rust version panics on allocation error, whereas the C
    version returns an error code. This typically does not affect Linux-based
    systems, which overcommit memory and then use the OOM Killer instead of
