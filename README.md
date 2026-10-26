@@ -25,6 +25,12 @@ to put up guardrails where possible.
    `GifFile->Error = D_GIF_ERR_DATA_TOO_BIG` (108).  
    This is a deliberate change to remove what we consider a bug in C
    implementation.
+ - **`DGifGetLine` with a `LineLen` of 0**: C treats a `LineLen` of 0 as
+   `GifFile->Image.Width` and writes that many pixels to the line. Rust returns
+   `GIF_ERROR` and sets `GifFile->Error = D_GIF_ERR_DATA_TOO_BIG` (108), as both
+   versions do for a negative `LineLen`.  
+   This is a deliberate change: C writes past the end of a line that holds
+   fewer than `Image.Width` pixels.
  - **File Writing**: Rust checks the return code of `write()` calls and
    returns an error on failure. The C implementation silently ignores write
    failures and returns `GIF_OK`.  
