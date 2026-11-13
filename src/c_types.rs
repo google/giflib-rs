@@ -27,12 +27,12 @@ mod c_types_gen {
 
 pub use c_types_gen::{
     GifByteType, GifColorType, GifPixelType, GifPrefixType, GifRecordType, GifWord,
-    GraphicsControlBlock, InputFunc, OutputFunc, APPLICATION_EXT_FUNC_CODE, COMMENT_EXT_FUNC_CODE,
-    CONTINUE_EXT_FUNC_CODE, DISPOSAL_UNSPECIFIED, D_GIF_ERR_CLOSE_FAILED, D_GIF_ERR_DATA_TOO_BIG,
-    D_GIF_ERR_EOF_TOO_SOON, D_GIF_ERR_IMAGE_DEFECT, D_GIF_ERR_NOT_ENOUGH_MEM,
-    D_GIF_ERR_NOT_GIF_FILE, D_GIF_ERR_NOT_READABLE, D_GIF_ERR_NO_COLOR_MAP, D_GIF_ERR_NO_IMAG_DSCR,
-    D_GIF_ERR_NO_SCRN_DSCR, D_GIF_ERR_OPEN_FAILED, D_GIF_ERR_READ_FAILED, D_GIF_ERR_WRONG_RECORD,
-    D_GIF_SUCCEEDED, E_GIF_ERR_CLOSE_FAILED, E_GIF_ERR_DATA_TOO_BIG, E_GIF_ERR_DISK_IS_FULL,
+    GraphicsControlBlock, APPLICATION_EXT_FUNC_CODE, COMMENT_EXT_FUNC_CODE, CONTINUE_EXT_FUNC_CODE,
+    DISPOSAL_UNSPECIFIED, D_GIF_ERR_CLOSE_FAILED, D_GIF_ERR_DATA_TOO_BIG, D_GIF_ERR_EOF_TOO_SOON,
+    D_GIF_ERR_IMAGE_DEFECT, D_GIF_ERR_NOT_ENOUGH_MEM, D_GIF_ERR_NOT_GIF_FILE,
+    D_GIF_ERR_NOT_READABLE, D_GIF_ERR_NO_COLOR_MAP, D_GIF_ERR_NO_IMAG_DSCR, D_GIF_ERR_NO_SCRN_DSCR,
+    D_GIF_ERR_OPEN_FAILED, D_GIF_ERR_READ_FAILED, D_GIF_ERR_WRONG_RECORD, D_GIF_SUCCEEDED,
+    E_GIF_ERR_CLOSE_FAILED, E_GIF_ERR_DATA_TOO_BIG, E_GIF_ERR_DISK_IS_FULL,
     E_GIF_ERR_HAS_IMAG_DSCR, E_GIF_ERR_HAS_SCRN_DSCR, E_GIF_ERR_NOT_ENOUGH_MEM,
     E_GIF_ERR_NOT_WRITEABLE, E_GIF_ERR_NO_COLOR_MAP, E_GIF_ERR_OPEN_FAILED, E_GIF_ERR_WRITE_FAILED,
     E_GIF_SUCCEEDED, GIF87_STAMP, GIF89_STAMP, GIF_ERROR, GIF_OK, GIF_STAMP, GIF_VERSION_POS,
@@ -391,6 +391,14 @@ unsafe impl Send for UserData {}
 //  Callback wrappers
 // ---------------------------------------------------------------------------
 
+/// C: `typedef int (*InputFunc)(GifFileType *, GifByteType *, int);`
+pub type InputFunc =
+    Option<unsafe extern "C" fn(*mut GifFileType, *mut GifByteType, c_int) -> c_int>;
+
+/// C: `typedef int (*OutputFunc)(GifFileType *, const GifByteType *, int);`
+pub type OutputFunc =
+    Option<unsafe extern "C" fn(*mut GifFileType, *const GifByteType, c_int) -> c_int>;
+
 /// Wraps an C read callback to centralize the safety decision.
 ///
 /// # Safety Invariants
@@ -406,18 +414,9 @@ pub(crate) struct ReadCallback(
 impl ReadCallback {
     /// # Safety
     /// The caller must guarantee the function pointer upholds the struct's safety invariants.
-    #[rustfmt::skip]
     pub(crate) unsafe fn new(
-        func: unsafe extern "C" fn(*mut c_types_gen::GifFileType, *mut GifByteType, c_int) -> c_int,
+        func: unsafe extern "C" fn(*mut GifFileType, *mut GifByteType, c_int) -> c_int,
     ) -> Self {
-        // SAFETY: `c_types_gen::InputFunc` uses `c_types_gen::GifFileType` for the first argument,
-        // but we want to use our own layout-identical `c_types::GifFileType`.
-        let func = unsafe {
-            core::mem::transmute::<
-                unsafe extern "C" fn(*mut c_types_gen::GifFileType, *mut GifByteType, c_int) -> c_int,
-                unsafe extern "C" fn(*mut crate::c_types::GifFileType, *mut GifByteType, c_int) -> c_int,
-            >(func)
-        };
         Self(func)
     }
 
@@ -444,18 +443,9 @@ pub(crate) struct WriteCallback(
 impl WriteCallback {
     /// # Safety
     /// The caller must guarantee the function pointer upholds the struct's safety invariants.
-    #[rustfmt::skip]
     pub(crate) unsafe fn new(
-        func: unsafe extern "C" fn(*mut c_types_gen::GifFileType, *const GifByteType, c_int) -> c_int,
+        func: unsafe extern "C" fn(*mut GifFileType, *const GifByteType, c_int) -> c_int,
     ) -> Self {
-        // SAFETY: `c_types_gen::OutputFunc` uses `c_types_gen::GifFileType` for the first argument,
-        // but we want to use our own layout-identical `c_types::GifFileType`.
-        let func = unsafe {
-            core::mem::transmute::<
-                unsafe extern "C" fn(*mut c_types_gen::GifFileType, *const GifByteType, c_int) -> c_int,
-                unsafe extern "C" fn(*mut crate::c_types::GifFileType, *const GifByteType, c_int) -> c_int,
-            >(func)
-        };
         Self(func)
     }
 
