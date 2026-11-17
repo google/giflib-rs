@@ -200,9 +200,11 @@ pub struct SavedImage {
 impl SavedImage {
     /// Returns the validated size of the raster bits in bytes, or `None` if the image
     /// dimensions are out of range (0 or >65535).
-    pub fn size(&self) -> Option<c_int> {
+    pub fn size(&self) -> Option<usize> {
         match (self.ImageDesc.Width, self.ImageDesc.Height) {
-            (1..=65535, 1..=65535) => self.ImageDesc.Width.checked_mul(self.ImageDesc.Height),
+            (1..=65535, 1..=65535) => {
+                (self.ImageDesc.Width as usize).checked_mul(self.ImageDesc.Height as usize)
+            }
             _ => None,
         }
     }
