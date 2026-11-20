@@ -219,6 +219,7 @@ pub fn egif_put_screen_desc(
     gif.SColorResolution = color_res as GifWord;
     gif.SBackGroundColor = background as GifWord;
 
+    let new_map = matches!(color_map, Arg::New(_));
     if let Arg::New(color_map) = color_map {
         gif.SColorMap = color_map.map(Box::new);
     }
@@ -241,6 +242,9 @@ pub fn egif_put_screen_desc(
         if cm.SortFlag {
             packed |= 0x08;
         }
+    }
+    if new_map && let Some(cm) = gif.SColorMap.as_mut() {
+        cm.SortFlag = false;
     }
 
     let buf = [
