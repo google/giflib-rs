@@ -943,6 +943,9 @@ pub unsafe extern "C" fn EGifPutLine(
     let Some(gif) = gif_file else {
         return GIF_ERROR;
     };
+    if line_len <= 0 && gif.Private.io.is_writable() {
+        return gif.result_to_status(Err(GifError::EDataTooBig));
+    }
     let len = if line_len <= 0 { 0 } else { line_len as usize };
     // SAFETY: caller guarantees `line` points to at least `len` bytes.
     // When len is 0, we pass an empty slice; egif_put_line defaults to Image.Width.
