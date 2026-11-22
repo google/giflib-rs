@@ -34,12 +34,14 @@ use core::ffi::c_int;
 const COLOR_ARRAY_SIZE: usize = 32768;
 const BITS_PER_PRIM_COLOR: usize = 5;
 const MAX_PRIM_COLOR: u8 = 0x1f;
+const NO_NEXT: usize = usize::MAX;
 
 #[derive(Clone)]
 struct QuantizedColor {
     rgb: [u8; 3],
     new_color_index: u8,
     count: i64,
+    next: usize,
 }
 
 struct ColorSubdiv {
@@ -47,8 +49,8 @@ struct ColorSubdiv {
     rgb_width: [u8; 3],
     num_entries: usize,
     count: i64,
-    /// Indices into the color array for this subdivision.
-    color_indices: Vec<usize>,
+    /// Index of the first entry of this subdivision's list in the color array.
+    quantized_colors: usize,
 }
 
 /// Quantize a 24-bit RGB image into an indexed image with at most
@@ -81,6 +83,7 @@ pub fn gif_quantize_buffer(
             ],
             new_color_index: 0,
             count: 0,
+            next: NO_NEXT,
         });
     }
 
@@ -94,31 +97,40 @@ pub fn gif_quantize_buffer(
     }
 
     // Initialize subdivisions.
-    let mut subdivs: Vec<ColorSubdiv> = Vec::with_capacity(256);
-    for _ in 0..256 {
-        subdivs.push(ColorSubdiv {
+    let mut subdivs: [ColorSubdiv; 256] = [const {
+        ColorSubdiv {
             rgb_min: [0, 0, 0],
             rgb_width: [255, 255, 255],
             num_entries: 0,
             count: 0,
-            color_indices: Vec::new(),
-        });
-    }
+            quantized_colors: NO_NEXT,
+        }
+    }; 256];
 
     // Find the non-empty entries in the color table and chain them into
     // the first subdivision.
-    let non_empty: Vec<usize> =
-        (0..COLOR_ARRAY_SIZE).filter(|&i| color_array[i].count > 0).collect();
+    let mut num_of_entries: usize = 0;
+    let mut last = NO_NEXT;
+    for i in 0..COLOR_ARRAY_SIZE {
+        if color_array[i].count > 0 {
+            if last == NO_NEXT {
+                subdivs[0].quantized_colors = i;
+            } else {
+                color_array[last].next = i;
+            }
+            last = i;
+            num_of_entries += 1;
+        }
+    }
 
-    if non_empty.is_empty() {
+    if num_of_entries == 0 {
         // No colors sampled — nothing to quantize. Match C behavior: return OK
         // with empty color map.
         *color_map_size = 0;
         return true;
     }
 
-    subdivs[0].color_indices = non_empty;
-    subdivs[0].num_entries = subdivs[0].color_indices.len();
+    subdivs[0].num_entries = num_of_entries;
     subdivs[0].count = (width as i64) * (height as i64);
 
     let mut new_color_map_size: usize = 1;
@@ -151,11 +163,13 @@ pub fn gif_quantize_buffer(
             let mut red: i64 = 0;
             let mut green: i64 = 0;
             let mut blue: i64 = 0;
-            for &ci in &subdivs[i].color_indices {
+            let mut ci = subdivs[i].quantized_colors;
+            while ci != NO_NEXT {
                 color_array[ci].new_color_index = i as u8;
                 red += color_array[ci].rgb[0] as i64;
                 green += color_array[ci].rgb[1] as i64;
                 blue += color_array[ci].rgb[2] as i64;
+                ci = color_array[ci].next;
             }
             output_color_map[i].Red = ((red << (8 - BITS_PER_PRIM_COLOR)) / j as i64) as u8;
             output_color_map[i].Green = ((green << (8 - BITS_PER_PRIM_COLOR)) / j as i64) as u8;
@@ -180,7 +194,7 @@ pub fn gif_quantize_buffer(
 /// Recursively subdivide the RGB space using median cut until
 /// `color_map_size` different cubes exist.
 fn subdiv_color_map(
-    subdivs: &mut Vec<ColorSubdiv>,
+    subdivs: &mut [ColorSubdiv],
     color_map_size: usize,
     new_color_map_size: &mut usize,
     color_array: &mut [QuantizedColor],
@@ -209,8 +223,13 @@ fn subdiv_color_map(
         // Sort all elements in the entry along the given axis and split at
         // the median. We sort on all three axes (primary + secondary + tertiary)
         // to avoid instability from qsort, matching the C behavior.
-        let mut sort_array: Vec<usize> = subdivs[index].color_indices.clone();
-        sort_array.sort_by(|&a, &b| {
+        let mut sort_array: Vec<usize> = Vec::with_capacity(subdivs[index].num_entries);
+        let mut ci = subdivs[index].quantized_colors;
+        while ci != NO_NEXT {
+            sort_array.push(ci);
+            ci = color_array[ci].next;
+        }
+        sort_array.sort_unstable_by(|&a, &b| {
             let ca = &color_array[a];
             let cb = &color_array[b];
             let hash_a = (ca.rgb[sort_rgb_axis] as i32) * 256 * 256
@@ -223,46 +242,45 @@ fn subdiv_color_map(
         });
 
         // Relink into subdivs[index].
-        subdivs[index].color_indices = sort_array;
+        for pair in sort_array.windows(2) {
+            color_array[pair[0]].next = pair[1];
+        }
+        color_array[sort_array[sort_array.len() - 1]].next = NO_NEXT;
+        subdivs[index].quantized_colors = sort_array[0];
+        drop(sort_array);
 
         // Now simply add the Counts until we have half of the Count.
         let half_count = subdivs[index].count / 2;
-        let mut sum = half_count - color_array[subdivs[index].color_indices[0]].count;
+        let mut cur_idx = subdivs[index].quantized_colors;
+        let mut sum = half_count - color_array[cur_idx].count;
         let mut num_entries: usize = 1;
-        let mut count: i64 = color_array[subdivs[index].color_indices[0]].count;
+        let mut count: i64 = color_array[cur_idx].count;
 
-        let total_entries = subdivs[index].num_entries;
-        let mut split_pos = 0;
-
-        for pos in 0..total_entries - 1 {
-            let next_idx = subdivs[index].color_indices[pos + 1];
+        loop {
+            let next_idx = color_array[cur_idx].next;
             if sum - color_array[next_idx].count < 0 {
-                split_pos = pos;
                 break;
             }
             // Also check that there's at least one more entry after the next
-            if pos + 2 >= total_entries {
-                split_pos = pos;
+            if color_array[next_idx].next == NO_NEXT {
                 break;
             }
             sum -= color_array[next_idx].count;
-            let cur_idx = subdivs[index].color_indices[pos + 1];
             num_entries += 1;
-            count += color_array[cur_idx].count;
-            split_pos = pos + 1;
+            count += color_array[next_idx].count;
+            cur_idx = next_idx;
         }
 
         // Save the values of the last color of the first half, and first of the
         // second half so we can update the bounding boxes later.
-        let max_color_val = color_array[subdivs[index].color_indices[split_pos]].rgb[sort_rgb_axis];
-        let min_color_val =
-            color_array[subdivs[index].color_indices[split_pos + 1]].rgb[sort_rgb_axis];
+        let max_color_val = color_array[cur_idx].rgb[sort_rgb_axis];
+        let min_color_val = color_array[color_array[cur_idx].next].rgb[sort_rgb_axis];
         let max_color = (max_color_val as u32) << (8 - BITS_PER_PRIM_COLOR);
         let min_color = (min_color_val as u32) << (8 - BITS_PER_PRIM_COLOR);
 
         // Partition: second half goes to new_color_map_size.
-        let second_half: Vec<usize> = subdivs[index].color_indices[split_pos + 1..].to_vec();
-        subdivs[index].color_indices.truncate(split_pos + 1);
+        let second_half = color_array[cur_idx].next;
+        color_array[cur_idx].next = NO_NEXT;
 
         let new_idx = *new_color_map_size;
 
@@ -270,7 +288,7 @@ fn subdiv_color_map(
         let parent_rgb_min = subdivs[index].rgb_min;
         let parent_rgb_width = subdivs[index].rgb_width;
 
-        subdivs[new_idx].color_indices = second_half;
+        subdivs[new_idx].quantized_colors = second_half;
         subdivs[new_idx].count = subdivs[index].count - count;
         subdivs[index].count = count;
         subdivs[new_idx].num_entries = subdivs[index].num_entries - num_entries;
