@@ -1054,10 +1054,12 @@ pub unsafe extern "C" fn EGifPutExtension(
 ///
 /// # Safety
 ///
-/// The caller must guarantee that `code_block` is a valid Pascal-string, i.e.
-/// `code_block[0]` is the length of the string and `code_block[1..]` are the
-/// bytes of the string, and that the pointer is valid for at least that many
-/// bytes.
+/// `code_block` may be null, which writes an empty terminator block without dereferencing it.
+/// If `code_block` is non-null, the caller must ensure that for the duration of this call
+/// (including any `OutputFunc` callback on `gif_file`), `code_block` is convertible to
+/// `&GifByteType` and `ptr::slice_from_raw_parts(code_block, 1 + usize::from(*code_block))` is
+/// convertible to `&[GifByteType]` (a Pascal-string block where `code_block[0]` is the payload
+/// length).
 ///
 /// The `code_size` parameter is unused and should be ignored. This behavior
 /// matches the C library.
@@ -1073,8 +1075,13 @@ pub unsafe extern "C" fn EGifPutCode(
     let block = if code_block.is_null() {
         None
     } else {
-        // SAFETY: code_block is non-null (checked above). Pascal-string: block[0] = len.
+        // SAFETY: `code_block` is checked non-null above, and by `# Safety` is convertible to
+        // `&GifByteType` (`u8`) for the duration of this call.
         let len = unsafe { *code_block } as usize + 1;
+        // SAFETY: `code_block` is non-null, `len <= 256 <= isize::MAX as usize` (`*code_block` is
+        // `u8`), and by `# Safety` (with no intervening mutation)
+        // `ptr::slice_from_raw_parts(code_block, len)` is convertible to `&[GifByteType]` for the
+        // duration of this call (including any `OutputFunc` callback), which outlives `block`.
         Some(unsafe { core::slice::from_raw_parts(code_block, len) })
     };
     let r = encoder::egif_put_code(gif, block);
