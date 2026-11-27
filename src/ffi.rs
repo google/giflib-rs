@@ -677,7 +677,11 @@ pub unsafe extern "C" fn GifMakeSavedImage<'a>(
     // temporary `&SavedImage` is dropped at the end of the `match` after cloning, before
     // `try_push_back` reallocates `gif.SavedImages`.
     let sp = match unsafe { copy_from.as_ref() } {
-        Some(copy_from) => copy_from.clone(),
+        Some(copy_from) => {
+            let mut sp = copy_from.clone();
+            sp.extension_blocks_vec().clear();
+            sp
+        }
         None => SavedImage::new(GifImageDesc {
             Left: 0,
             Top: 0,
