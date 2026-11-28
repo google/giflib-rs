@@ -62,7 +62,7 @@ pub extern "C" fn DGifOpenFileName(
     match gif {
         Ok(gif) => Some(gif),
         Err(e) => {
-            if let Some(error) = error {
+            if e != GifError::DNoScreenDesc && let Some(error) = error {
                 *error = e as c_int;
             }
             None
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn DGifOpenFileHandle(
     match gif {
         Ok(gif) => Some(gif),
         Err(e) => {
-            if let Some(error) = error {
+            if e != GifError::DNoScreenDesc && let Some(error) = error {
                 *error = e as c_int;
             }
             None
